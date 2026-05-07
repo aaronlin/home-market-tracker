@@ -1,0 +1,57 @@
+app:
+  timezone: America/New_York
+
+rentcast:
+  base_url: https://api.rentcast.io/v1
+
+tracker:
+  subject_prefix: "[Home Market]"
+  state_path: data/state/home_market.yaml
+  preview_root: data/previews
+  raw_snapshot_root: data/raw
+  weekly_schedule:
+    day: saturday
+    hour_local: 8
+  comp_defaults:
+    property_type: Single Family
+    max_radius_miles: 1.5
+    days_old: 365
+    comp_count: 10
+  comp_annotations:
+    400 Busy Road Ave, Example City, CA 90000:
+      tags: [busy-road]
+      note: Example annotation for a lower-quality comp.
+      exclude_from_median: true
+  homes:
+    - id: example_primary
+      name: Example primary home
+      address: 100 Example Ave, Example City, CA
+      property_type: Single Family
+      purchase_price: 1000000
+      comp_count: 25
+      display_count: 10
+      days_old: 365
+      bedrooms: "3"
+      bathrooms: "2"
+      square_footage: "1500"
+      lot_size: "7000"
+      comp_square_footage: "1000:2000"
+      comp_lot_size: "5000:10000"
+    - id: example_townhouse
+      name: Example townhouse
+      address: 200 Example Ln, Sampletown, CA
+      property_type: Townhouse
+      purchase_price: 900000
+      comp_count: 25
+      display_count: 10
+      days_old: 365
+      bedrooms: "3"
+      bathrooms: "2.5"
+      square_footage: "2200"
+      lot_size: "1800"
+      comp_square_footage: "1600:2800"
+      same_hoa_addresses:
+        - 210 Example Ln, Sampletown, CA 90000
+      same_hoa_patterns:
+        - example ln sampletown ca
+        - sample hoa sampletown ca

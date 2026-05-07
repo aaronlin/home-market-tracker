@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TODAY_LOCAL="$(TZ=America/New_York date +%Y-%m-%d)"
+STATE_DIR="$APP_ROOT/data/state"
+STAMP_FILE="$STATE_DIR/weekly-send-$TODAY_LOCAL.done"
+
+mkdir -p "$STATE_DIR"
+if [[ -f "$STAMP_FILE" ]]; then
+  echo "Home market tracker already sent for $TODAY_LOCAL."
+  exit 0
+fi
+
+cd "$APP_ROOT"
+python3 src/run_weekly.py --send
+touch "$STAMP_FILE"
