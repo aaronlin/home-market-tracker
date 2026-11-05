@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import math
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -32,6 +34,33 @@ def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[Comparabl
     normalized = [_with_rank_score(home, comp) for comp in normalized]
     normalized.sort(key=lambda comp: (comp.rank_score or 0, comp.sale_date or "", comp.sale_price or 0), reverse=True)
     return normalized
+
+
+def normalize_nearby_listings(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:
+    if home.close_listing_radius_miles is None:
+        return []
+    avm_payload = payload.get("avm") if isinstance(payload.get("avm"), dict) else payload
+    subject_address = _normalized_address(((avm_payload.get("subjectProperty") or {}).get("formattedAddress") or home.address))
+    subject_lat = _float((avm_payload.get("subjectProperty") or {}).get("latitude")) if isinstance(avm_payload.get("subjectProperty"), dict) else None
+    subject_lon = _float((avm_payload.get("subjectProperty") or {}).get("longitude")) if isinstance(avm_payload.get("subjectProperty"), dict) else None
+    cutoff = _cutoff_date(home.days_old)
+    listings = []
+    seen_ids = set()
+    for raw in _records(payload.get("sale_listings")):
+        if _normalized_address(_address(raw)) == subject_address:
+            continue
+        comp = _normalize_comp(home, {**raw, "_sources": ["listing"]})
+        comp = _with_computed_distance(comp, raw, subject_lat, subject_lon)
+        if comp.distance_miles is None or comp.distance_miles > home.close_listing_radius_miles:
+            continue
+        if not _within_lookback(comp, cutoff):
+            continue
+        if comp.id in seen_ids:
+            continue
+        seen_ids.add(comp.id)
+        listings.append(comp)
+    listings.sort(key=lambda comp: (comp.distance_miles if comp.distance_miles is not None else 999, comp.sale_date or "", comp.sale_price or 0))
+    return listings
 
 
 def extract_value_estimate(payload: Dict[str, Any]) -> Optional[int]:
@@ -112,6 +141,28 @@ def _normalize_comp(home: HomeConfig, raw: Dict[str, Any]) -> ComparableSale:
         exclude_from_median=exclude,
         raw=raw,
     )
+
+
+def _with_computed_distance(comp: ComparableSale, raw: Dict[str, Any], subject_lat: Optional[float], subject_lon: Optional[float]) -> ComparableSale:
+    if comp.distance_miles is not None or subject_lat is None or subject_lon is None:
+        return comp
+    lat = _float(raw.get("latitude"))
+    lon = _float(raw.get("longitude"))
+    distance = _distance_miles(subject_lat, subject_lon, lat, lon)
+    if distance is None:
+        return comp
+    return replace(comp, distance_miles=round(distance, 2))
+
+
+def _distance_miles(lat1: float, lon1: float, lat2: Optional[float], lon2: Optional[float]) -> Optional[float]:
+    if lat2 is None or lon2 is None:
+        return None
+    radius_miles = 3958.8
+    lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(math.radians, (lat1, lon1, lat2, lon2))
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    return radius_miles * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _with_rank_score(home: HomeConfig, comp: ComparableSale) -> ComparableSale:

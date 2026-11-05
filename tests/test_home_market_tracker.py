@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -14,11 +15,11 @@ sys.path.insert(0, str(APP_SRC))
 
 import app_config
 from app_config import SetupError, _load_env_file, load_yaml
-from models import HomeConfig, HomeRun, TrackerRun
-from normalize import new_comps, normalize_comps, percent_change
+from models import ComparableSale, HomeConfig, HomeRun, TrackerRun
+from normalize import new_comps, normalize_comps, normalize_nearby_listings, percent_change
 from provider import RentCastProvider
 from render import render_digest
-from run_weekly import run_preview, run_send
+from run_weekly import _subject, run_preview, run_send
 from state import HomeState, TrackerState, load_state
 
 
@@ -89,6 +90,12 @@ def settings(tmpdir):
 
 
 class HomeMarketTrackerTests(unittest.TestCase):
+    def setUp(self):
+        # Keep dated market fixtures inside their lookback window as time passes.
+        clock = patch("normalize.datetime", wraps=datetime)
+        self.addCleanup(clock.stop)
+        clock.start().now.return_value = datetime(2026, 5, 6, tzinfo=timezone.utc)
+
     def test_settings_load(self):
         app_root = Path(__file__).resolve().parents[1]
         loaded = load_yaml(app_root / "config" / "settings.example.yaml")
@@ -204,28 +211,128 @@ class HomeMarketTrackerTests(unittest.TestCase):
         self.assertIsNone(percent_change(110, 0))
 
     def test_digest_notes_first_run_baseline_and_second_run_changes(self):
-        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 180, 10)
+        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 180, 10, close_listing_radius_miles=0.5)
         comps = normalize_comps(home, sample_payload())
-        run = TrackerRun(homes=[HomeRun(home=home, comps=comps, value_estimate=2000000)], generated_at="2026-05-06T00:00:00+00:00")
+        nearby_listing = comps[0]
+        run = TrackerRun(
+            homes=[HomeRun(home=home, comps=comps, value_estimate=2000000, nearby_listings=[nearby_listing])],
+            generated_at="2026-05-06T00:00:00+00:00",
+        )
         first_digest = render_digest(run, TrackerState())
-        self.assertIn("No prior sent report exists yet", first_digest["text_body"])
-        self.assertIn("Selected comparable market rows", first_digest["text_body"])
-        self.assertNotIn("New since last sent report:", first_digest["text_body"])
+        self.assertIn("尚無先前寄送紀錄", first_digest["text_body"])
+        self.assertIn("相似物件排序結果", first_digest["text_body"])
+        self.assertIn("RentCast 初步篩選", first_digest["text_body"])
+        self.assertIn("相似物件排序篩選", first_digest["text_body"])
+        self.assertIn("附近待售物件", first_digest["text_body"])
+        self.assertIn("附近待售物件", first_digest["html_body"])
+        self.assertNotIn("自上次寄送後新增的物件：", first_digest["text_body"])
         self.assertNotIn("AVM estimate", first_digest["text_body"])
         self.assertNotIn("AVM estimate", first_digest["html_body"])
         previous = TrackerState(homes={"home": HomeState(seen_comp_ids=[comps[0].id], median_sale_price=2000000, median_price_per_sqft=1000)})
         second_digest = render_digest(run, previous)
-        self.assertIn("New rows since last sent report: 1", second_digest["text_body"])
-        self.assertIn("New since last sent report:", second_digest["text_body"])
-        self.assertIn("Add to final comp set", second_digest["text_body"])
-        self.assertIn("Median final comp price", second_digest["text_body"])
-        self.assertIn("Median final comp $/sqft", second_digest["text_body"])
-        self.assertIn("Internal Score", second_digest["html_body"])
+        self.assertIn("自上次寄送後新增： 1", second_digest["text_body"])
+        self.assertIn("自上次寄送後新增的物件：", second_digest["text_body"])
+        self.assertIn("納入最終比較物件", second_digest["text_body"])
+        self.assertIn("比較物件價格中位數", second_digest["text_body"])
+        self.assertIn("比較物件每 sqft 價格中位數", second_digest["text_body"])
+        self.assertIn("排序分數", second_digest["html_body"])
+        self.assertIn("最終比較物件", second_digest["html_body"])
+        self.assertIn("開價", second_digest["html_body"])
+        self.assertIn("參考價格", second_digest["html_body"])
+        self.assertIn("最後更新", second_digest["html_body"])
+        self.assertIn("100 Sample St, Example City, CA", second_digest["html_body"])
+        self.assertIn("$1,900,000", second_digest["html_body"])
         self.assertIn("+2.5%", second_digest["text_body"])
-        self.assertIn("Subject property:", second_digest["text_body"])
+        self.assertIn("追蹤房屋：", second_digest["text_body"])
         self.assertNotIn("list n/a", second_digest["text_body"])
         self.assertNotIn("Latest comparable market rows", second_digest["text_body"])
         self.assertNotIn("New comparable market rows", second_digest["text_body"])
+
+    def test_chinese_digest_preserves_addresses_sqft_and_annotations(self):
+        address = "100 Sample St & <Annex>, Example City, CA"
+        home = HomeConfig("home", "Home & <North>", "1 Main St", "Townhouse", 1.5, 180, 10)
+        comp = ComparableSale(
+            id="sample", address=address, status="Active", sqft=1500,
+            listing_price=900000, notes=["Keep original note & <detail>"],
+        )
+        digest = render_digest(TrackerRun([HomeRun(home, [comp])], "2026-05-06T00:00:00+00:00"), TrackerState())
+        self.assertEqual(digest["subject"], "房市週報：1 間房屋，1 筆新增物件")
+        for body in (digest["text_body"], digest["html_body"]):
+            self.assertIn("連棟住宅", body)
+            self.assertIn("待售", body)
+            self.assertIn("無資料", body)
+            self.assertIn("sqft", body)
+            self.assertIn("1500", body)
+            self.assertNotIn("平方英尺", body)
+            self.assertNotIn("Active", body)
+        self.assertIn(address, digest["text_body"])
+        self.assertIn("Keep original note & <detail>", digest["text_body"])
+        self.assertIn("100 Sample St &amp; &lt;Annex&gt;, Example City, CA", digest["html_body"])
+        self.assertIn("Keep original note &amp; &lt;detail&gt;", digest["html_body"])
+        self.assertIn('lang="zh-Hant"', digest["html_body"])
+        self.assertIn('charset="utf-8"', digest["html_body"])
+
+    def test_subject_uses_chinese_default_and_preserves_custom_prefix(self):
+        self.assertEqual(_subject({}, "房市週報"), "[房市週報] 房市週報")
+        self.assertEqual(_subject({"tracker": {"subject_prefix": "[Custom]"}}, "房市週報"), "[Custom] 房市週報")
+
+    def test_nearby_listings_are_distance_filtered_from_listing_rows(self):
+        home = HomeConfig(
+            "home",
+            "Home",
+            "1 Main",
+            "Single Family",
+            1.5,
+            365,
+            10,
+            close_listing_radius_miles=0.5,
+        )
+        payload = {
+            "avm": {"subjectProperty": {"formattedAddress": "1 Main", "latitude": 37.0, "longitude": -122.0}},
+            "sale_listings": [
+                {
+                    "id": "near",
+                    "formattedAddress": "Nearby Listing, Example City, CA",
+                    "latitude": 37.001,
+                    "longitude": -122.001,
+                    "price": 1000000,
+                    "listedDate": "2026-05-01T00:00:00Z",
+                    "lastSeenDate": "2026-05-02T00:00:00Z",
+                },
+                {
+                    "id": "far",
+                    "formattedAddress": "Far Listing, Example City, CA",
+                    "latitude": 37.02,
+                    "longitude": -122.02,
+                    "price": 1100000,
+                    "listedDate": "2026-05-01T00:00:00Z",
+                    "lastSeenDate": "2026-05-02T00:00:00Z",
+                },
+            ],
+        }
+        listings = normalize_nearby_listings(home, payload)
+        self.assertEqual([listing.address for listing in listings], ["Nearby Listing, Example City, CA"])
+        self.assertLess(listings[0].distance_miles, 0.5)
+
+    def test_ranked_comp_filters_are_separate_from_broad_candidates(self):
+        home = HomeConfig(
+            "home",
+            "Home",
+            "1 Main",
+            "Single Family",
+            1.5,
+            365,
+            25,
+            comp_square_footage="1000:2500",
+            ranked_comp_bedrooms="3",
+            ranked_comp_bathrooms="1:2",
+            ranked_comp_square_footage="1000:1900",
+            ranked_comp_lot_size="5500:11000",
+        )
+        comps = normalize_comps(home, sample_payload())
+        run = HomeRun(home=home, comps=comps)
+        self.assertEqual(len(run.comps), 2)
+        self.assertEqual([comp.address for comp in run.selected_comps], ["100 Sample St, Example City, CA"])
 
     def test_avm_candidates_survive_when_listing_source_is_sparse(self):
         home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 365, 25)
@@ -257,7 +364,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
             generated_at="2026-05-06T00:00:00+00:00",
         )
         digest = render_digest(run, TrackerState())
-        self.assertIn("Subject property: Single Family, 3/1, sqft 1335, lot 7750, built 1951", digest["text_body"])
+        self.assertIn("追蹤房屋： 獨棟住宅，房間／衛浴 3/1，sqft 1335，土地面積（sqft） 7750，建造年份 1951", digest["text_body"])
         self.assertNotIn("999999", digest["text_body"])
 
     def test_larger_lot_sfh_ranks_higher_than_small_lot(self):
@@ -463,8 +570,8 @@ class HomeMarketTrackerTests(unittest.TestCase):
         ]
         previous = TrackerState(homes={"home": HomeState(seen_comp_ids=[comp.id for comp in comps[:4]])})
         digest = render_digest(TrackerRun([HomeRun(home, comps)], "2026-05-06T00:00:00+00:00"), previous)
-        self.assertIn("5 Comp St | Add to final comp set", digest["text_body"])
-        self.assertIn("6 Comp St | Monitor only", digest["text_body"])
+        self.assertIn("5 Comp St | 納入最終比較物件", digest["text_body"])
+        self.assertIn("6 Comp St | 僅供觀察", digest["text_body"])
 
     def test_same_hoa_and_hoa_fee_display(self):
         home = HomeConfig(
@@ -485,7 +592,9 @@ class HomeMarketTrackerTests(unittest.TestCase):
         self.assertTrue(comp.hoa_match)
         self.assertEqual(comp.hoa_fee, 815)
         digest = render_digest(TrackerRun([HomeRun(home, [comp])], "2026-05-06T00:00:00+00:00"), TrackerState())
-        self.assertIn("same HOA yes", digest["text_body"])
+        self.assertIn("相同 HOA 是", digest["text_body"])
+        self.assertIn("相同 HOA", digest["html_body"])
+        self.assertIn("$815", digest["html_body"])
 
     def test_build_run_uses_three_source_provider_once_per_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -493,6 +602,27 @@ class HomeMarketTrackerTests(unittest.TestCase):
             run = __import__("run_weekly").build_run(settings(tmpdir), provider)
             self.assertEqual(len(run.homes), 1)
             self.assertEqual(len(provider.calls), 1)
+
+    def test_provider_paginates_listing_searches(self):
+        class PagingProvider(RentCastProvider):
+            def __init__(self):
+                super().__init__("https://api.example.test", api_key="key")
+                self.requests = []
+
+            def _get_json(self, path, params):
+                self.requests.append((path, dict(params)))
+                if params["offset"] == 0:
+                    return [{"formattedAddress": f"{index} Page One"} for index in range(500)]
+                if params["offset"] == 500:
+                    return [{"formattedAddress": "Page Two"}]
+                return []
+
+        provider = PagingProvider()
+        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 365, 25)
+        listings = provider.fetch_sale_listings(home)
+        self.assertEqual(len(listings), 501)
+        self.assertEqual([request[1]["offset"] for request in provider.requests], [0, 500])
+        self.assertTrue(all(request[1]["limit"] == 500 for request in provider.requests))
 
     def test_preview_writes_files_without_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:

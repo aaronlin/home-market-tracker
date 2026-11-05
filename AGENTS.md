@@ -26,6 +26,7 @@ The tracker queries up to three RentCast data sources per configured home:
 - `src/deliver.py` handles SMTP email delivery.
 - `tests/test_home_market_tracker.py` is the primary regression suite.
 - `bin/send-weekly` and `launchd/*.plist` support local scheduled runs.
+- `bin/install-launchagent` generates and loads the local LaunchAgent. Keep its label and template free of personal names; detect local paths during installation.
 
 ## Local Data And Privacy
 

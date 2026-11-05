@@ -5,7 +5,7 @@ rentcast:
   base_url: https://api.rentcast.io/v1
 
 tracker:
-  subject_prefix: "[Home Market]"
+  subject_prefix: "[房市週報]"
   state_path: data/state/home_market.yaml
   preview_root: data/previews
   raw_snapshot_root: data/raw
@@ -37,6 +37,11 @@ tracker:
       lot_size: "7000"
       comp_square_footage: "1000:2000"
       comp_lot_size: "5000:10000"
+      close_listing_radius_miles: 0.5
+      ranked_comp_bedrooms: "3"
+      ranked_comp_bathrooms: "1:2"
+      ranked_comp_square_footage: "1000:1800"
+      ranked_comp_lot_size: "5500:9000"
     - id: example_townhouse
       name: Example townhouse
       address: 200 Example Ln, Sampletown, CA

@@ -4,7 +4,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.example.home-market-tracker.weekly</string>
+  <string>com.home-market-tracker.weekly</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -17,7 +17,7 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Weekday</key>
-    <integer>7</integer>
+    <integer>6</integer>
     <key>Hour</key>
     <integer>8</integer>
     <key>Minute</key>

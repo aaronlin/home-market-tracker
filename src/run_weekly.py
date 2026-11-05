@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from app_config import SetupError, load_dotenv, load_settings, resolve_repo_path
 from deliver import send_email
 from models import HomeConfig, HomeRun, TrackerRun
-from normalize import extract_value_estimate, normalize_comps
+from normalize import extract_value_estimate, normalize_comps, normalize_nearby_listings
 from provider import PropertyDataProvider, RentCastProvider, write_raw_snapshot
 from render import render_digest
 from state import load_state, save_state
@@ -75,6 +75,7 @@ def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> Track
         payload = provider.fetch_home_market(home)
         write_raw_snapshot(_raw_snapshot_root(settings), home.id, payload, generated)
         comps = normalize_comps(home, payload)
+        nearby_listings = normalize_nearby_listings(home, payload)
         avm_payload = payload.get("avm") if isinstance(payload.get("avm"), dict) else payload
         subject_property = avm_payload.get("subjectProperty") if isinstance(avm_payload.get("subjectProperty"), dict) else {}
         home_runs.append(
@@ -83,6 +84,7 @@ def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> Track
                 comps=comps,
                 value_estimate=extract_value_estimate(payload),
                 subject_property=subject_property,
+                nearby_listings=nearby_listings,
             )
         )
     return TrackerRun(homes=home_runs, generated_at=generated)
@@ -115,6 +117,11 @@ def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
                 comp_square_footage=_optional_str(raw_home.get("comp_square_footage")),
                 comp_lot_size=_optional_str(raw_home.get("comp_lot_size")),
                 display_count=_optional_int(raw_home.get("display_count")),
+                close_listing_radius_miles=_optional_float(raw_home.get("close_listing_radius_miles")),
+                ranked_comp_bedrooms=_optional_str(raw_home.get("ranked_comp_bedrooms")),
+                ranked_comp_bathrooms=_optional_str(raw_home.get("ranked_comp_bathrooms")),
+                ranked_comp_square_footage=_optional_str(raw_home.get("ranked_comp_square_footage")),
+                ranked_comp_lot_size=_optional_str(raw_home.get("ranked_comp_lot_size")),
                 comp_annotations=comp_annotations,
                 same_hoa_addresses=[str(value) for value in raw_home.get("same_hoa_addresses") or []],
                 same_hoa_patterns=[str(value) for value in raw_home.get("same_hoa_patterns") or []],
@@ -146,6 +153,15 @@ def _optional_int(value) -> int | None:
         return None
 
 
+def _optional_float(value) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _state_path(settings: Dict[str, Any]) -> Path:
     return resolve_repo_path((settings.get("tracker") or {}).get("state_path", "data/state/home_market.yaml"))
 
@@ -159,7 +175,7 @@ def _raw_snapshot_root(settings: Dict[str, Any]) -> Path:
 
 
 def _subject(settings: Dict[str, Any], subject: str) -> str:
-    prefix = str((settings.get("tracker") or {}).get("subject_prefix", "[Home Market]")).strip()
+    prefix = str((settings.get("tracker") or {}).get("subject_prefix", "[房市週報]")).strip()
     return f"{prefix} {subject}".strip()
 
 

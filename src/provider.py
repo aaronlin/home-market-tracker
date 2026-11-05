@@ -58,14 +58,12 @@ class RentCastProvider:
 
     def fetch_sale_listings(self, home: HomeConfig) -> Dict[str, Any]:
         params = self._search_params(home)
-        params["limit"] = max(home.comp_count, home.display_count or 0, 25)
-        return self._get_json("/listings/sale", params)
+        return self._get_paginated_json("/listings/sale", params)
 
     def fetch_properties(self, home: HomeConfig) -> Dict[str, Any]:
         params = self._search_params(home)
-        params["limit"] = max(home.comp_count, home.display_count or 0, 25)
         params["saleDateRange"] = home.days_old
-        return self._get_json("/properties", params)
+        return self._get_paginated_json("/properties", params)
 
     def _search_params(self, home: HomeConfig) -> Dict[str, Any]:
         params: Dict[str, Any] = {
@@ -111,6 +109,30 @@ class RentCastProvider:
         if not isinstance(loaded, (dict, list)):
             raise ProviderError("RentCast returned an unexpected response.")
         return loaded
+
+    def _get_paginated_json(self, path: str, params: Dict[str, Any]) -> Any:
+        page_size = 500
+        offset = 0
+        records = []
+        while True:
+            page_params = {**params, "limit": page_size, "offset": offset}
+            loaded = self._get_json(path, page_params)
+            page = _response_records(loaded)
+            records.extend(page)
+            if len(page) < page_size:
+                return records
+            offset += page_size
+
+
+def _response_records(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        for key in ("listings", "properties", "records", "data", "results"):
+            maybe = value.get(key)
+            if isinstance(maybe, list):
+                return maybe
+    return []
 
 
 def _http_error_detail(exc: HTTPError) -> str:

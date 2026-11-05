@@ -83,19 +83,24 @@ bin/send-weekly
 launchd/example.weekly.plist
 ```
 
-Copy the example plist to your LaunchAgents directory, replace `/absolute/path/to/home-market-tracker` with your local repo path, then load it:
+After completing setup, install the LaunchAgent with the Python environment that has the project dependencies:
 
 ```bash
-cp launchd/example.weekly.plist \
-  ~/Library/LaunchAgents/com.example.home-market-tracker.weekly.plist
-
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.home-market-tracker.weekly.plist
+python3 bin/install-launchagent
 ```
 
-Run manually:
+If you use the repo's `.venv`, run `.venv/bin/python bin/install-launchagent` instead.
+
+The installer detects the repo path and Python directory and creates the log directory.
+It uses the fixed label `com.home-market-tracker.weekly`; no personal name is required.
+The generated plist stays in `~/Library/LaunchAgents`, outside the repo.
+Run the installer again after moving the repo or changing Python environments.
+Installation replaces the existing job with this label without sending email.
+
+To send immediately:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.example.home-market-tracker.weekly
+launchctl kickstart gui/$(id -u)/com.home-market-tracker.weekly
 ```
 
 ## Public Release Checklist

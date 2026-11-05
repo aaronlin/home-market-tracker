@@ -24,6 +24,11 @@ class HomeConfig:
     comp_square_footage: Optional[str] = None
     comp_lot_size: Optional[str] = None
     display_count: Optional[int] = None
+    close_listing_radius_miles: Optional[float] = None
+    ranked_comp_bedrooms: Optional[str] = None
+    ranked_comp_bathrooms: Optional[str] = None
+    ranked_comp_square_footage: Optional[str] = None
+    ranked_comp_lot_size: Optional[str] = None
     comp_annotations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     same_hoa_addresses: List[str] = field(default_factory=list)
     same_hoa_patterns: List[str] = field(default_factory=list)
@@ -70,12 +75,14 @@ class HomeRun:
     comps: List[ComparableSale]
     value_estimate: Optional[int] = None
     subject_property: Dict[str, Any] = field(default_factory=dict)
+    nearby_listings: List[ComparableSale] = field(default_factory=list)
 
     @property
     def selected_comps(self) -> List[ComparableSale]:
+        comps = [comp for comp in self.comps if self._passes_ranked_comp_filters(comp)]
         if self.home.display_count and self.home.display_count > 0:
-            return self.comps[: self.home.display_count]
-        return list(self.comps)
+            return comps[: self.home.display_count]
+        return comps
 
     @property
     def final_comps(self) -> List[ComparableSale]:
@@ -90,6 +97,43 @@ class HomeRun:
     def median_price_per_sqft(self) -> Optional[float]:
         values = [comp.price_per_sqft for comp in self.final_comps if comp.price_per_sqft is not None]
         return float(median(values)) if values else None
+
+    def _passes_ranked_comp_filters(self, comp: ComparableSale) -> bool:
+        if not _number_in_range(comp.beds, self.home.ranked_comp_bedrooms):
+            return False
+        if not _number_in_range(comp.baths, self.home.ranked_comp_bathrooms):
+            return False
+        if not _number_in_range(comp.sqft, self.home.ranked_comp_square_footage):
+            return False
+        if not _number_in_range(comp.lot_size, self.home.ranked_comp_lot_size):
+            return False
+        return True
+
+
+def _number_in_range(value: Optional[float], raw_range: Optional[str]) -> bool:
+    if not raw_range:
+        return True
+    if value is None:
+        return False
+    raw_range = str(raw_range)
+    if ":" not in raw_range:
+        target = _optional_float(raw_range)
+        return target is not None and value == target
+    low_raw, high_raw = raw_range.split(":", 1)
+    low = _optional_float(low_raw) if low_raw else None
+    high = _optional_float(high_raw) if high_raw else None
+    if low is not None and value < low:
+        return False
+    if high is not None and value > high:
+        return False
+    return True
+
+
+def _optional_float(value: str) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
