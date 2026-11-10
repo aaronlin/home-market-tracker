@@ -141,6 +141,19 @@ class SaleEvidenceTests(unittest.TestCase):
                     self.assertIn("待售開價 0 筆", body)
                     self.assertNotIn("$950,000", body)
 
+    def test_original_asking_price_is_not_current_asking_evidence(self):
+        from models import HomeRun, TrackerRun
+        from render import render_digest
+        from state import TrackerState
+        rows = [{"formattedAddress": self.address, "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 999000, "price": 950000},
+                {"formattedAddress": "200 Synthetic St", "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 850000}]
+        comps = normalize_comps(self.home, {"sale_listings": rows})
+        body = render_digest(TrackerRun([HomeRun(self.home, comps)], "2026-11-09T16:00:00+00:00"), TrackerState())["text_body"]
+        self.assertIn("開價 $950,000", body)
+        self.assertIn("待售開價 1 筆", body)
+        self.assertNotIn("$999,000", body)
+        self.assertNotIn("$850,000", body)
+
     def test_property_observation_cannot_refresh_listing_or_avm_inventory(self):
         from models import HomeRun, TrackerRun
         from render import render_digest

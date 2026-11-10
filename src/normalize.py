@@ -112,7 +112,7 @@ def _normalize_comp(home: HomeConfig, raw: Dict[str, Any]) -> ComparableSale:
     address = _address(raw)
     sqft = _int(_first_value(raw, ("squareFootage", "sqft", "livingArea", "livingAreaSqFt")))
     listing = raw.get("_listing_record", raw if "property" not in set(raw.get("_sources") or []) else {})
-    listing_price = _int(_first_value(listing, ("listPrice", "listingPrice", "originalListPrice", "price")))
+    listing_price = _int(_first_value(listing, ("price", "listPrice", "listingPrice")))
     recorded_sale = _recorded_sale(raw)
     sold_price = recorded_sale.price if recorded_sale else None
     market_price = sold_price or _int(_first_value(raw, ("salePrice", "lastSalePrice", "soldPrice", "price"))) or listing_price
