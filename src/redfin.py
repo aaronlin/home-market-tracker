@@ -321,8 +321,10 @@ def apply_redfin(comps: Iterable[ComparableSale], references: Dict[str, RedfinRe
                             and _group(reference, 'listing_price') == 'mls_listing'
                             and all(observation.mls_number == rf_mls and observation.price == comp.listing_price
                                     for observation in latest_rc_observations)
-                            and (not comp.listed_date or not values.get('listed_date')
-                                 or _claim_date(comp.listed_date) == values['listed_date']))
+                            and bool(comp.listed_date) and bool(values.get('listed_date'))
+                            and _claim_date(comp.listed_date) == values['listed_date']
+                            and all(_claim_date(observation.listed_date) == values['listed_date']
+                                    for observation in latest_rc_observations))
             if has_listing:
                 if (rc_observed and rc_observed > rf_observed and not same_episode) or (rc_sale_date and rc_sale_date > rf_observed):
                     withhold_listing('RentCast has a later listing or sale claim than the saved Redfin MLS observation; current listing metrics are unresolved.')

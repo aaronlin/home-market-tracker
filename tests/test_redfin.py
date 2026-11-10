@@ -290,6 +290,30 @@ class RedfinTests(unittest.TestCase):
         self.assertTrue(any('same MLS episode' in note for note in result.reconciliation_notes))
         self.assertEqual(asdict(result), asdict(apply_redfin([result], self.load(record))[0]))
 
+    def test_unknown_start_never_proves_same_episode_or_retains_foreign_dom(self):
+        for missing in ('redfin', 'rentcast', 'observation'):
+            with self.subTest(missing=missing):
+                record = deepcopy(self.record)
+                record['values'].update(status='Active', listing_price=1000000,
+                                        observed_at='2026-10-15', listed_date='2026-10-01')
+                record['field_evidence']['status'] = {'mls_number': 'MLS-SAME'}
+                observation = ListingObservation(1000000, '2026-10-25', '2026-10-01', None,
+                                                 'MLS-SAME', 24, 'listing')
+                comp = replace(self.comp, status='Active', last_seen_date='2026-10-25',
+                               listing_price=1000000, listed_date='2026-10-01', days_on_market=24,
+                               listing_observations=[observation])
+                if missing == 'redfin': record['values'].pop('listed_date')
+                if missing == 'rentcast': comp = replace(comp, listed_date=None)
+                if missing == 'observation': comp = replace(comp, listing_observations=[replace(observation, listed_date='')])
+                result = apply_redfin([comp], self.load(record))[0]
+                self.assertIn('status', result.unresolved_fields)
+                self.assertIsNone(result.days_on_market)
+                self.assertEqual(result.source_snapshots['rentcast']['days_on_market'], 24)
+                # Even a newer Redfin observation cannot retain foreign DOM without the missing proof.
+                record['values']['observed_at'] = '2026-10-26'
+                result = apply_redfin([comp], self.load(record))[0]
+                self.assertIsNone(result.days_on_market)
+
     def test_later_observation_with_changed_or_unknown_episode_stays_unresolved(self):
         record = deepcopy(self.record)
         record['values'].update(status='Active', listing_price=1000000, observed_at='2026-10-15', listed_date='2026-10-01')
