@@ -210,59 +210,37 @@ class HomeMarketTrackerTests(unittest.TestCase):
         self.assertIsNone(percent_change(110, None))
         self.assertIsNone(percent_change(110, 0))
 
-    def test_digest_notes_first_run_baseline_and_second_run_changes(self):
-        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 180, 10, close_listing_radius_miles=0.5)
+    def test_digest_does_not_infer_market_change_from_legacy_state(self):
+        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 180, 10)
         comps = normalize_comps(home, sample_payload())
-        nearby_listing = comps[0]
-        run = TrackerRun(
-            homes=[HomeRun(home=home, comps=comps, value_estimate=2000000, nearby_listings=[nearby_listing])],
-            generated_at="2026-05-06T00:00:00+00:00",
-        )
-        first_digest = render_digest(run, TrackerState())
-        self.assertIn("尚無先前寄送紀錄", first_digest["text_body"])
-        self.assertIn("相似物件排序結果", first_digest["text_body"])
-        self.assertIn("RentCast 初步篩選", first_digest["text_body"])
-        self.assertIn("相似物件排序篩選", first_digest["text_body"])
-        self.assertIn("附近待售物件", first_digest["text_body"])
-        self.assertIn("附近待售物件", first_digest["html_body"])
-        self.assertNotIn("自上次寄送後新增的物件：", first_digest["text_body"])
-        self.assertNotIn("AVM estimate", first_digest["text_body"])
-        self.assertNotIn("AVM estimate", first_digest["html_body"])
-        previous = TrackerState(homes={"home": HomeState(seen_comp_ids=[comps[0].id], median_sale_price=2000000, median_price_per_sqft=1000)})
-        second_digest = render_digest(run, previous)
-        self.assertIn("自上次寄送後新增： 1", second_digest["text_body"])
-        self.assertIn("自上次寄送後新增的物件：", second_digest["text_body"])
-        self.assertIn("納入最終比較物件", second_digest["text_body"])
-        self.assertIn("比較物件價格中位數", second_digest["text_body"])
-        self.assertIn("比較物件每 sqft 價格中位數", second_digest["text_body"])
-        self.assertIn("排序分數", second_digest["html_body"])
-        self.assertIn("最終比較物件", second_digest["html_body"])
-        self.assertIn("開價", second_digest["html_body"])
-        self.assertIn("參考價格", second_digest["html_body"])
-        self.assertIn("最後更新", second_digest["html_body"])
-        self.assertIn("100 Sample St, Example City, CA", second_digest["html_body"])
-        self.assertIn("$1,900,000", second_digest["html_body"])
-        self.assertIn("+2.5%", second_digest["text_body"])
-        self.assertIn("追蹤房屋：", second_digest["text_body"])
-        self.assertNotIn("list n/a", second_digest["text_body"])
-        self.assertNotIn("Latest comparable market rows", second_digest["text_body"])
-        self.assertNotIn("New comparable market rows", second_digest["text_body"])
+        run = TrackerRun([HomeRun(home, comps)], "2026-05-06T00:00:00+00:00")
+        previous = TrackerState(homes={"home": HomeState(seen_comp_ids=[comps[0].id], median_sale_price=2000000)})
+        first = render_digest(run, TrackerState())
+        second = render_digest(run, previous)
+        self.assertEqual(first, second)
+        for body in (second["text_body"], second["html_body"]):
+            self.assertIn("變化追蹤尚未啟用", body)
+            self.assertIn("成交紀錄", body)
+            self.assertIn("目前待售開價", body)
+            self.assertNotIn("中位數", body)
+            self.assertNotIn("相較上次", body)
+        self.assertNotIn("新增物件", second["subject"])
 
     def test_chinese_digest_preserves_addresses_sqft_and_annotations(self):
         address = "100 Sample St & <Annex>, Example City, CA"
         home = HomeConfig("home", "Home & <North>", "1 Main St", "Townhouse", 1.5, 180, 10)
         comp = ComparableSale(
             id="sample", address=address, status="Active", sqft=1500,
-            listing_price=900000, notes=["Keep original note & <detail>"],
+            listing_price=900000, last_seen_date="2026-05-05", notes=["Keep original note & <detail>"],
         )
         digest = render_digest(TrackerRun([HomeRun(home, [comp])], "2026-05-06T00:00:00+00:00"), TrackerState())
-        self.assertEqual(digest["subject"], "房市週報：1 間房屋，1 筆新增物件")
+        self.assertEqual(digest["subject"], "房市近況｜1 間房的成交與待售資料")
         for body in (digest["text_body"], digest["html_body"]):
             self.assertIn("連棟住宅", body)
             self.assertIn("待售", body)
-            self.assertIn("無資料", body)
+            self.assertIn("未提供", body)
             self.assertIn("sqft", body)
-            self.assertIn("1500", body)
+            self.assertIn("1,500", body)
             self.assertNotIn("平方英尺", body)
             self.assertNotIn("Active", body)
         self.assertIn(address, digest["text_body"])
@@ -364,7 +342,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
             generated_at="2026-05-06T00:00:00+00:00",
         )
         digest = render_digest(run, TrackerState())
-        self.assertIn("追蹤房屋： 獨棟住宅，房間／衛浴 3/1，sqft 1335，土地面積（sqft） 7750，建造年份 1951", digest["text_body"])
+        self.assertIn("追蹤房屋： 獨棟住宅 · 3 房／1 衛 · 室內 1,335 sqft · 土地 7,750 sqft · 1951 年建", digest["text_body"])
         self.assertNotIn("999999", digest["text_body"])
 
     def test_larger_lot_sfh_ranks_higher_than_small_lot(self):
@@ -487,7 +465,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
                 {
                     "id": "852",
                     "formattedAddress": "852 Orchard Ave, Example City, CA 90000",
-                    "history": {"2026-05-10": {"event": "Sale", "price": 2600000}},
+                    "history": {"2026-05-03": {"event": "Sale", "price": 2600000}},
                 }
             ],
         }
@@ -516,8 +494,8 @@ class HomeMarketTrackerTests(unittest.TestCase):
         )
         payload = {
             "comparables": [
-                {"formattedAddress": "400 Busy Road Ave, Example City, CA 90000", "price": 1000000, "squareFootage": 1000},
-                {"formattedAddress": "Good Comp, Example City, CA 90000", "price": 2000000, "squareFootage": 1000},
+                {"formattedAddress": "400 Busy Road Ave, Example City, CA 90000", "price": 1000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
+                {"formattedAddress": "Good Comp, Example City, CA 90000", "price": 2000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
             ]
         }
         comps = normalize_comps(home, payload)
@@ -549,29 +527,13 @@ class HomeMarketTrackerTests(unittest.TestCase):
         self.assertEqual([comp.sale_price for comp in run.homes[0].final_comps], [100, 200, 300, 400, 500])
         self.assertEqual(run.homes[0].median_sale_price, 300)
 
-    def test_new_row_recommendation_marks_only_final_comp_rows(self):
-        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 365, 25, display_count=6)
-        comps = [
-            normalize_comps(
-                home,
-                {
-                    "comparables": [
-                        {
-                            "id": str(index),
-                            "formattedAddress": f"{index} Comp St",
-                            "price": index * 100,
-                            "squareFootage": 100,
-                            "distance": index / 10,
-                        }
-                    ]
-                },
-            )[0]
-            for index in range(1, 7)
-        ]
-        previous = TrackerState(homes={"home": HomeState(seen_comp_ids=[comp.id for comp in comps[:4]])})
-        digest = render_digest(TrackerRun([HomeRun(home, comps)], "2026-05-06T00:00:00+00:00"), previous)
-        self.assertIn("5 Comp St | 納入最終比較物件", digest["text_body"])
-        self.assertIn("6 Comp St | 僅供觀察", digest["text_body"])
+    def test_undated_avm_rows_are_not_presented_as_sales_or_current_asks(self):
+        home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 365, 25)
+        comps = normalize_comps(home, {"comparables": [{"formattedAddress": "Undated Ask", "price": 1100000}]})
+        digest = render_digest(TrackerRun([HomeRun(home, comps)], "2026-05-06T00:00:00+00:00"), TrackerState())
+        self.assertIn("成交紀錄 0 筆", digest["text_body"])
+        self.assertIn("待售開價 0 筆", digest["text_body"])
+        self.assertNotIn("$1,100,000", digest["text_body"])
 
     def test_same_hoa_and_hoa_fee_display(self):
         home = HomeConfig(
@@ -585,15 +547,15 @@ class HomeMarketTrackerTests(unittest.TestCase):
             same_hoa_addresses=["210 Example Ln, Sampletown, CA 90000"],
         )
         payload = {
-            "comparables": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "price": 1995000}],
+            "comparables": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "price": 1995000, "status": "Active", "lastSeenDate": "2026-05-05"}],
             "properties": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "hoa": {"fee": 815}}],
         }
         comp = normalize_comps(home, payload)[0]
         self.assertTrue(comp.hoa_match)
         self.assertEqual(comp.hoa_fee, 815)
         digest = render_digest(TrackerRun([HomeRun(home, [comp])], "2026-05-06T00:00:00+00:00"), TrackerState())
-        self.assertIn("相同 HOA 是", digest["text_body"])
-        self.assertIn("相同 HOA", digest["html_body"])
+        self.assertIn("符合已設定的同社區提示", digest["text_body"])
+        self.assertIn("符合已設定的同社區提示", digest["html_body"])
         self.assertIn("$815", digest["html_body"])
 
     def test_build_run_uses_three_source_provider_once_per_home(self):

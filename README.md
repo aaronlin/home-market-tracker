@@ -1,12 +1,22 @@
 # Home Market Tracker
 
-Weekly, API-first tracker for comparable single-family home sales near the configured homes.
+Weekly, API-first market evidence report for configured homes. The email separates source-recorded sales from recently observed active asking prices. It supports monitoring, not a home valuation or a market appreciation estimate.
 
 Each run uses up to three RentCast requests per configured home:
 
 - `/avm/value` for AVM context and comparable candidates
 - `/listings/sale` for status, listed price, listed date, removed date, last seen date, and DOM
 - `/properties` for property-record enrichment when available, including sale history or HOA fields
+
+## Report contents
+
+Each home gets an evidence summary before detailed rows. Recorded sale prices require a paired transaction date from property records. The report starts with a 90-day sale window and expands up to the configured lookback (capped at 365 days) when fewer than three records are available. It shows the window, eligible count, and up to three latest rows rather than a mixed-price median.
+
+Active asking rows require a positive listed price and a source last-active observation within seven calendar days. Missing or stale evidence is explicit. An inactive listing is not treated as a closed sale. Existing property annotations remain on displayed eligible rows. Both categories use the configured similarity rules before their independent three-row limits.
+
+The first repair intentionally omits appreciation percentages and new-inventory claims. Existing successful-run state is retained, but does not support reliable event comparisons yet. Acquisition filters, provider and scheduling remain unchanged. The next increments can test broader acquisition and introduce a versioned event baseline separately.
+
+See [the API price and tradeoff comparison (Traditional Chinese)](docs/api-comparison.md), [product context](PRODUCT.md), and [email design](DESIGN.md).
 
 ## Setup
 

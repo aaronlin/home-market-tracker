@@ -35,6 +35,13 @@ class HomeConfig:
 
 
 @dataclass(frozen=True)
+class RecordedSale:
+    price: int
+    transaction_date: str
+    source: str
+
+
+@dataclass(frozen=True)
 class ComparableSale:
     id: str
     address: str
@@ -59,6 +66,7 @@ class ComparableSale:
     exclude_from_median: bool = False
     rank_score: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    recorded_sale: Optional[RecordedSale] = None
 
     @property
     def sale_price(self) -> Optional[int]:
@@ -78,8 +86,12 @@ class HomeRun:
     nearby_listings: List[ComparableSale] = field(default_factory=list)
 
     @property
+    def ranked_comps(self) -> List[ComparableSale]:
+        return [comp for comp in self.comps if self._passes_ranked_comp_filters(comp)]
+
+    @property
     def selected_comps(self) -> List[ComparableSale]:
-        comps = [comp for comp in self.comps if self._passes_ranked_comp_filters(comp)]
+        comps = self.ranked_comps
         if self.home.display_count and self.home.display_count > 0:
             return comps[: self.home.display_count]
         return comps
