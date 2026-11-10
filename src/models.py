@@ -23,6 +23,8 @@ class HomeConfig:
     year_built: Optional[str] = None
     comp_square_footage: Optional[str] = None
     comp_lot_size: Optional[str] = None
+    listing_bedrooms: Optional[str] = None
+    listing_bathrooms: Optional[str] = None
     display_count: Optional[int] = None
     close_listing_radius_miles: Optional[float] = None
     ranked_comp_bedrooms: Optional[str] = None
@@ -50,6 +52,23 @@ class ListingObservation:
     mls_number: Optional[str]
     days_on_market: Optional[int]
     source: str
+
+
+@dataclass(frozen=True)
+class RedfinReference:
+    address: str
+    matched_address: str
+    url: str
+    checked_at: str
+    source: str
+    facts: List[str] = field(default_factory=list)
+    values: Dict[str, Any] = field(default_factory=dict)
+    recorded_sale: Optional[RecordedSale] = None
+    listing_observations: List[ListingObservation] = field(default_factory=list)
+    raw: Dict[str, Any] = field(default_factory=dict)
+    source_group: str = "unknown"
+    field_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    ownership: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -91,13 +110,24 @@ class ComparableSale:
     source_property_types: Dict[str, str] = field(default_factory=dict)
     listing_observations: List[ListingObservation] = field(default_factory=list)
     redfin_url: Optional[str] = None
+    redfin_reference: Optional[RedfinReference] = None
+    field_sources: Dict[str, str] = field(default_factory=dict)
+    source_snapshots: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    unresolved_fields: List[str] = field(default_factory=list)
+    reconciliation_notes: List[str] = field(default_factory=list)
 
     @property
     def sale_price(self) -> Optional[int]:
+        if "recorded_sale" in self.unresolved_fields or "sale_price" in self.unresolved_fields:
+            return None
         return self.sold_price or self.market_price or self.listing_price
 
     @property
     def sale_date(self) -> Optional[str]:
+        if "recorded_sale" in self.unresolved_fields or "sale_date" in self.unresolved_fields:
+            return None
+        if self.recorded_sale and self.field_sources.get("recorded_sale") == "redfin":
+            return self.recorded_sale.transaction_date
         return self.removed_date or self.last_seen_date or self.listed_date
 
 
@@ -109,10 +139,13 @@ class HomeRun:
     subject_property: Dict[str, Any] = field(default_factory=dict)
     nearby_listings: List[ComparableSale] = field(default_factory=list)
     retrieval: List[RetrievalInfo] = field(default_factory=list)
+    candidates: List[ComparableSale] = field(default_factory=list)
 
     @property
     def ranked_comps(self) -> List[ComparableSale]:
-        return [comp for comp in self.comps if self._passes_ranked_comp_filters(comp)]
+        from market_metrics import cohort_for
+        return [comp for comp in self.comps if cohort_for(self.home, comp) != "excluded_condo"
+                and self._passes_ranked_comp_filters(comp)]
 
     @property
     def selected_comps(self) -> List[ComparableSale]:

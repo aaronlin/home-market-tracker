@@ -32,7 +32,7 @@ class MarketDiscoveryTests(unittest.TestCase):
         for key in ('bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'):
             self.assertNotIn(key, params)
         self.assertEqual(params['squareFootage'], '1600:2800')
-        self.assertEqual(params['propertyType'], 'Townhouse|Condo')
+        self.assertEqual(params['propertyType'], 'Townhouse')
 
     def test_explicit_comparable_lot_bounds_are_preserved(self):
         from dataclasses import replace

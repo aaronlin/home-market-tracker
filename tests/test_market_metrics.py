@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from market_metrics import asking_gap, cohort_for, source_dom
 from models import ComparableSale, HomeConfig, ListingObservation, RecordedSale
-from normalize import normalize_comps, normalize_nearby_listings
+from normalize import normalize_comps, normalize_candidates, normalize_nearby_listings
 
 
 class MarketMetricsTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class MarketMetricsTests(unittest.TestCase):
         self.comp = ComparableSale('c', '2 Example St', recorded_sale=RecordedSale(900000, '2026-09-20', 'property.lastSale'), listing_observations=[self.observation])
 
     def test_classification_uses_property_even_when_listing_disagrees(self):
-        self.assertEqual(cohort_for(self.home, replace(self.comp, source_property_types={'property': 'Condo', 'listing': 'Townhouse'})), 'condo_context')
+        self.assertEqual(cohort_for(self.home, replace(self.comp, source_property_types={'property': 'Condo', 'listing': 'Townhouse'})), 'excluded_condo')
         self.assertEqual(cohort_for(self.home, self.comp), 'unknown')
         self.assertEqual(cohort_for(self.home, replace(self.comp, source_property_types={'listing': 'Townhouse'})), 'primary')
         self.assertEqual(cohort_for(self.home, replace(self.comp, source_property_types={'property': 'Single Family'})), 'other')
@@ -86,13 +86,13 @@ class MarketMetricsTests(unittest.TestCase):
         self.assertEqual(len(comp.listing_observations), 1)
         self.assertEqual(asking_gap(comp).amount, -100000)
         listing['history']['2026-08-01']['mlsNumber'] = 'MLS2'
-        comp = normalize_comps(self.home, payload)[0]
+        comp = normalize_candidates(self.home, payload)[0]
         self.assertIsNone(asking_gap(comp))
         listing['history']['2026-08-01']['mlsNumber'] = 'MLS1'
         comp = normalize_comps(self.home, payload)[0]
         self.assertEqual(asking_gap(comp).amount, -100000)
         listing['history']['2026-08-01']['price'] = 1100000
-        comp = normalize_comps(self.home, payload)[0]
+        comp = normalize_candidates(self.home, payload)[0]
         self.assertIsNone(asking_gap(comp))
 
     def test_history_cannot_borrow_unrelated_current_mls_or_created_date(self):
@@ -129,7 +129,7 @@ class MarketMetricsTests(unittest.TestCase):
 
     def test_unit_conflict_blocks_pairing(self):
         payload = {'sale_listings': [self.listing(unit='1')], 'properties': [dict(formattedAddress='2 Example St', unit='2', lastSalePrice=900000, lastSaleDate='2026-09-20')]}
-        comp = normalize_comps(self.home, payload)[0]
+        comp = normalize_candidates(self.home, payload)[0]
         self.assertIsNone(asking_gap(comp))
 
 

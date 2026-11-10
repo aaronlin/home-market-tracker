@@ -43,6 +43,7 @@ def sample_payload():
         "comparables": [
             {
                 "id": "a",
+                "propertyType": "Single Family",
                 "formattedAddress": "100 Sample St, Example City, CA",
                 "distance": 0.4,
                 "bedrooms": 3,
@@ -57,6 +58,7 @@ def sample_payload():
             },
             {
                 "id": "b",
+                "propertyType": "Single Family",
                 "formattedAddress": "200 Sample St, Example City, CA",
                 "distance": 1.1,
                 "bedrooms": 4,
@@ -78,6 +80,8 @@ def settings(tmpdir):
             "state_path": str(root / "state.yaml"),
             "preview_root": str(root / "previews"),
             "raw_snapshot_root": str(root / "raw"),
+            "evidence_root": str(root / "evidence"),
+            "redfin_reference_path": str(root / "references.json"),
             "comp_defaults": {
                 "property_type": "Single Family",
                 "max_radius_miles": 1.5,

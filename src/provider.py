@@ -75,9 +75,13 @@ class RentCastProvider:
         return self._get_paginated_json("/properties", params, "properties")
 
     def _search_params(self, home: HomeConfig) -> Dict[str, Any]:
-        types = "Townhouse|Condo" if home.property_type.lower() == "townhouse" else home.property_type
+        types = home.property_type
         params: Dict[str, Any] = {"address": home.address, "radius": home.max_radius_miles,
                                   "propertyType": types}
+        if home.listing_bedrooms:
+            params["bedrooms"] = home.listing_bedrooms
+        if home.listing_bathrooms:
+            params["bathrooms"] = home.listing_bathrooms
         if home.comp_square_footage:
             params["squareFootage"] = home.comp_square_footage
         if home.comp_lot_size:

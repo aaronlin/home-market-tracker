@@ -9,10 +9,10 @@ from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit
 
 from models import ComparableSale, HomeConfig, ListingObservation, RecordedSale
-from market_metrics import source_dom
+from market_metrics import source_dom, cohort_for
 
 
-def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:
+def normalize_candidates(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:
     avm_payload = payload.get("avm") if isinstance(payload.get("avm"), dict) else payload
     if "avm" not in payload and "properties" in payload:
         avm_payload = {key: value for key, value in payload.items() if key != "properties"}
@@ -29,20 +29,50 @@ def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[Comparabl
     subject = avm_payload.get("subjectProperty") or {}
     subject_lat, subject_lon = _float(subject.get("latitude")), _float(subject.get("longitude"))
     normalized = []
-    cutoff = _cutoff_date(home.days_old)
     for raw in merged.values():
-        if _normalized_address(_address(raw)) == subject_address:
-            continue
         comp = _with_computed_distance(_normalize_comp(home, raw), raw, subject_lat, subject_lon)
-        if comp.distance_miles is not None and comp.distance_miles > home.max_radius_miles:
-            continue
-        if not _within_lookback(comp, cutoff):
-            continue
+        if _normalized_address(_address(raw)) == subject_address:
+            comp = replace(comp, raw={**comp.raw, "_is_subject": True})
         normalized.append(comp)
-    normalized = [comp for comp in normalized if _passes_local_filters(home, comp)]
+    return normalized
+
+
+def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:
+    return qualify_comps(home, normalize_candidates(home, payload), final=False)
+
+
+def qualify_comps(home: HomeConfig, candidates: List[ComparableSale], final: bool = True) -> List[ComparableSale]:
+    normalized = [comp for comp in candidates if not qualification_reasons(home, comp, final=final)]
     normalized = [_with_rank_score(home, comp) for comp in normalized]
     normalized.sort(key=lambda comp: (comp.rank_score or 0, comp.sale_date or "", comp.sale_price or 0), reverse=True)
     return normalized
+
+
+def qualification_reasons(home: HomeConfig, comp: ComparableSale, final: bool = True) -> List[str]:
+    reasons = []
+    if comp.raw.get("_is_subject"):
+        reasons.append("subject_property")
+    if comp.raw.get("_listing_identity_conflict") or (comp.raw.get("_sale_record") or {}).get("_identity_conflict"):
+        reasons.append("identity_conflict")
+    if comp.distance_miles is not None and comp.distance_miles > home.max_radius_miles:
+        reasons.append("outside_radius")
+    if not _within_lookback(comp, _cutoff_date(home.days_old)):
+        reasons.append("outside_or_unknown_lookback")
+    if not _value_in_range(comp.sqft, home.comp_square_footage):
+        reasons.append("initial_sqft_bounds")
+    if not _value_in_range(comp.lot_size, home.comp_lot_size):
+        reasons.append("initial_lot_bounds")
+    if not final:
+        return reasons
+    cohort = cohort_for(home, comp)
+    if cohort != "primary":
+        reasons.append(cohort)
+    from models import _number_in_range
+    for field, bounds in (("beds", home.ranked_comp_bedrooms), ("baths", home.ranked_comp_bathrooms),
+                          ("sqft", home.ranked_comp_square_footage), ("lot_size", home.ranked_comp_lot_size)):
+        if not _number_in_range(getattr(comp, field), bounds):
+            reasons.append("final_" + field + "_bounds")
+    return reasons
 
 
 def normalize_nearby_listings(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:

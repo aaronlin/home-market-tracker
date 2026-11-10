@@ -12,15 +12,15 @@ A homeowner monitoring two configured California homes through a weekly email, w
 
 ## Product Purpose
 
-Support the homeowner’s buy/sell deliberation with inspectable comparable outcomes, observed competition, source-reported DOM, and eligible dated asking references. Keep asking prices, transactions, source coverage and cohort differences distinct; do not issue an automated buy/sell instruction or subject valuation.
+Support the homeowner’s buy/sell deliberation with inspectable comparable outcomes, observed competition, source-reported DOM, and eligible dated asking references. Prefer identified Redfin MLS facts within compatible events, retain RentCast as supplemental claims and preserve both sources locally. Keep asking prices, transactions, source coverage and cohort differences distinct; do not issue an automated buy/sell instruction or subject valuation.
 
 ## Operating Context
 
-The Python tool fetches RentCast records and renders Traditional Chinese HTML and plain-text email. Preview does not send or advance successful-run state. SMTP success precedes state updates. The owner requested multiple local candidate rounds with independent PM and designer review, then one final demonstration email.
+The Python tool fetches RentCast records, reconciles optional agent-checked private Redfin snapshots, and renders Traditional Chinese HTML and plain-text email. Preview does not send or advance successful-run state. SMTP success precedes state updates. The owner requires PM, designer and housing-domain review before implementation and of the final integrated candidate, then one approved preview email. Housing review is an AI transaction perspective, not a licensed realtor opinion.
 
 ## Capabilities and Constraints
 
-Retain the current provider and schedule. Discover property records by bounded geography/date, then enforce explicit comparable criteria locally. Query active and inactive listing evidence separately, with bounded pagination and visible incompleteness. Do not infer missing closing dates, invent changes, purchase feeds, or require a homeowner-maintained comp list. Real addresses, settings, snapshots and email outputs are private. New provider access and costs remain future decisions. The owner explicitly approved evidence for buy/sell strategy after reviewing the first email. Strategy support does not imply selling-price recommendations, contract DOM, a confirmed sale/final-list ratio, or a universal market heat score.
+Retain the current provider and schedule. Saved Redfin references are reused automatically; new-address discovery and recurring page refresh are not automated. Discover property records by bounded geography/date, then enforce explicit comparable criteria locally. Query active and inactive listing evidence separately, with bounded pagination and visible incompleteness. Do not infer missing closing dates, invent changes, purchase feeds, or require a homeowner-maintained comp list. Real addresses, settings, snapshots and email outputs are private. New provider access and costs remain future decisions. The owner explicitly approved evidence for buy/sell strategy after reviewing the first email. Strategy support does not imply selling-price recommendations, contract DOM, a confirmed sale/final-list ratio, or a universal market heat score.
 
 ## Evidence on Hand
 
@@ -35,8 +35,9 @@ Source, synthetic fixtures, saved private provider snapshots and preview artifac
 
 ## Evidence terms
 
-- **Same-type cohort:** source property classification matches the tracked type, with property records taking precedence over listing/AVM classification. Explicit comparable/ranked criteria still apply. A cross-source discrepancy remains visible.
-- **Condo context:** for a Townhouse target, source-classified Condo records shown separately. They are not silently pooled into same-type counts or asserted to be the same physical style or HOA.
+- **Same-type cohort:** matching SFH or Townhouse classification after source reconciliation and explicit relevance bounds. Known Condo or condominium ownership claims and unresolved Condo/Townhouse conflicts are excluded. A Townhome style label does not prove fee-simple title. Ordinary nonconflicting Townhouse candidates have unverified legal/project comparability.
+- **Source comparison evidence:** original vendor claims, provenance, chosen values, differences and exclusion reasons retained privately for future provider evaluation. These are ground-truth candidates, not independently verified truth.
+- **Redfin priority:** identified MLS facts can win same-event disagreements. Older Redfin events cannot erase newer RentCast claims; unreconciled affected metrics are withheld and both claims retained. Snippets and estimates cannot become authoritative metrics.
 - **Source DOM:** a nonnegative integer provided by the listing source, associated with an observation date. It is not inferred listing-to-contract or listing-to-close duration.
 - **Dated asking reference gap:** sale price minus a qualifying pre-sale listing observation, with the percent using that positive reference as denominator. It is not a confirmed final/original-list ratio or negotiated discount.
 - **Retrieval health:** the recorded query scope, rows, page completion and timestamps. An empty narrow cohort does not establish no local sales. Provider coverage can remain incomplete even when all requested pages are read.

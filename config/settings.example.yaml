@@ -55,6 +55,10 @@ tracker:
       square_footage: "2200"
       lot_size: "1800"
       comp_square_footage: "1600:2800"
+      listing_bedrooms: "2:4"
+      listing_bathrooms: "2:3.5"
+      ranked_comp_bedrooms: "3:4"
+      ranked_comp_bathrooms: "2:3.5"
       same_hoa_addresses:
         - 210 Example Ln, Sampletown, CA 90000
       same_hoa_patterns:

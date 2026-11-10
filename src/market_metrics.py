@@ -25,15 +25,23 @@ def _type(value: str) -> str:
 
 
 def cohort_for(home: HomeConfig, comp: ComparableSale) -> str:
+    condo_kinds = {"condo", "condominium", "condocoop", "condominiumownership"}
+    ownership = getattr(comp.redfin_reference, "ownership", "unknown") if comp.redfin_reference else "unknown"
+    if ownership == "condominium" or any(_type(value) in condo_kinds for value in comp.source_property_types.values()):
+        return "excluded_condo"
     classification = next((comp.source_property_types[source] for source in
-                           ("property", "listing", "avm") if comp.source_property_types.get(source)), "")
+                           ("redfin", "property", "listing", "avm") if comp.source_property_types.get(source)), "")
     kind, subject = _type(classification), _type(home.property_type)
     if not kind or kind in {"unknown", "other", "none"}:
         return "unknown"
-    if kind == subject:
+    if subject in {"singlefamily", "sfh"}:
+        subject = "singlefamily"
+    if kind in {"singlefamilyresidential", "singlefamilyhome", "sfh"}:
+        kind = "singlefamily"
+    if kind in {"townhome", "townhomes"}:
+        kind = "townhouse"
+    if kind == subject and kind in {"singlefamily", "townhouse"}:
         return "primary"
-    if subject == "townhouse" and kind == "condo":
-        return "condo_context"
     return "other"
 
 

@@ -10,13 +10,13 @@ Each run uses three RentCast data sources per home. Active/inactive searches and
 
 ## Report contents
 
-Each home gets a summary before detailed rows. The report supports buy/sell deliberation with evidence, rather than an automated recommendation or subject valuation. It separates same-type recorded sales, recently observed active asks, and broader Condo context for a Townhouse target. Property-record classification takes precedence, and disagreements with listing classification stay visible.
+Each home gets a summary before detailed rows. The report supports buy/sell deliberation with evidence, rather than an automated recommendation or subject valuation. It separates matching SFH or Townhouse recorded sales and recently observed active asks. Known Condo and unresolved ownership/type conflicts are excluded. Identified Redfin MLS facts take priority within compatible events, with both original sources preserved.
 
-Recorded sale prices require a paired transaction date from property records. The report starts with a 90-day same-type sale window and expands up to the configured lookback (capped at 365 days) when fewer than three records are available. It shows windows/counts and up to three latest rows per category, without mixed-price medians or unsupported appreciation/new-inventory claims. Legacy successful-run state remains compatible and does not supply these new metrics.
+Recorded sale prices require a paired transaction date from property records or identified Redfin MLS history. The report starts with a 90-day same-type sale window and expands up to the configured lookback (capped at 365 days) when fewer than three records are available. It shows windows/counts and up to three latest rows per category, without mixed-price medians or unsupported appreciation/new-inventory claims. Legacy successful-run state remains compatible and does not supply these new metrics.
 
 Active asking rows require a positive current price and source last-active observation within seven days. Source DOM must be a nonnegative integer, with zero preserved. It is not listing-to-contract or listing-to-close duration. A dated asking-reference gap appears only with compatible identity, dated pre-sale observation/removal, an unambiguous MLS episode and at most 90 days between observation and transaction. It remains an unconfirmed reference, not a final/original-list ratio or negotiated discount. Ambiguity is unavailable, not zero.
 
-Property discovery uses geography and the sale-date window instead of exact subject bed/bath/year/lot constraints. Explicit comparable size/lot ranges and ranked filters remain local eligibility rules. Listing searches request Active and Inactive separately and include Condo as context for Townhouse targets. Pagination is bounded at three pages per search by default; incomplete/missing acquisition metadata is visible. A failed request still aborts the run and cannot masquerade as empty inventory.
+Property discovery uses geography and the sale-date window instead of exact subject bed/bath/year/lot constraints. Explicit comparable size/lot ranges and ranked filters remain local eligibility rules. Listing searches request Active and Inactive separately for the tracked type, with optional explicit discovery bed/bath bands. Pagination is bounded at three pages per search by default; incomplete/missing acquisition metadata is visible. A failed request still aborts the run and cannot masquerade as empty inventory.
 
 Each displayed row links to a safe source-provided Redfin page when available, otherwise an honestly labeled Google search restricted to Redfin. Rendering makes no external request. No automated Redfin ingestion is configured. See [market metric definitions and the search diagnosis](docs/market-evidence.md), [API prices and tradeoffs](docs/api-comparison.md), [product context](PRODUCT.md), and [email design](DESIGN.md).
 
@@ -134,3 +134,13 @@ git ls-files | xargs rg -n "real-street-name|real-city|local-username|absolute-h
 ```bash
 python3 -m unittest discover tests
 ```
+
+### Source reconciliation
+
+The optional private `tracker.redfin_reference_path` defaults to `data/references/redfin.json`. Agent-checked references provide direct property links and identified MLS facts. Scheduled runs reuse saved references; they do not automatically discover new Redfin pages or refresh existing pages. Missing references retain an honestly labeled search fallback.
+
+Redfin MLS facts take priority within compatible events. Unresolved newer/older transaction or status claims are preserved and withheld from affected metrics. Known Condo and unresolved Condo/Townhouse conflicts are excluded. Only matching SFH and Townhouse candidates are featured. Explicit townhouse listing discovery bands can use `listing_bedrooms` and `listing_bathrooms`, independently from final `ranked_comp_*` limits. Broad property discovery retains correction candidates.
+
+Every run writes private timestamped comparison evidence to `tracker.evidence_root`, default `data/evidence`. The archive includes original RentCast payloads, normalized original and Redfin claims, field sources, effective values, differences and exclusion reasons before final filtering. Preview can write these diagnostic artifacts but never sends email or advances successful-send state. These third-party claims are not independently verified ground truth.
+
+See [source policy and schema](docs/redfin-evidence.md) for provenance and freshness rules.

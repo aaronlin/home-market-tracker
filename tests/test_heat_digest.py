@@ -31,17 +31,14 @@ class HeatDigestTests(unittest.TestCase):
     def digest(self, rows, retrieval=()):
         return render_digest(TrackerRun([HomeRun(self.home, rows, retrieval=list(retrieval))], '2026-11-10T20:00:00+00:00'), TrackerState())
 
-    def test_context_sale_is_visible_without_inflating_same_type_count(self):
+    def test_condo_is_excluded_even_when_listing_calls_it_townhouse(self):
         condo = replace(self.sale, source_property_types={'listing': 'Townhouse', 'property': 'Condo'})
         for body in self.digest([condo]).values():
             if '同房型' not in body:
                 continue
             self.assertIn('同房型 365 天內成交紀錄 0 筆', body)
-            self.assertIn('較廣分類參考：Condo', body)
-            self.assertIn('未併入同房型', body)
-            self.assertIn('成交價 $900,000', body)
-            self.assertIn('房屋紀錄 Condo', body)
-            self.assertIn('掛牌 Townhouse', body)
+            self.assertNotIn('較廣分類參考', body)
+            self.assertNotIn('成交價 $900,000', body)
             self.assertIn('不代表周邊一年沒有成交', body)
 
     def test_unknown_and_unlike_types_do_not_enter_narrow_sale_sample(self):

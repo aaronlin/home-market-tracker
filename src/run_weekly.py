@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -9,10 +10,11 @@ from typing import Any, Dict, List
 from app_config import SetupError, load_dotenv, load_settings, resolve_repo_path
 from deliver import send_email
 from models import HomeConfig, HomeRun, RetrievalInfo, TrackerRun
-from normalize import extract_value_estimate, normalize_comps, normalize_nearby_listings
+from normalize import extract_value_estimate, normalize_comps, normalize_candidates, qualify_comps, qualification_reasons, normalize_nearby_listings
 from provider import PropertyDataProvider, RentCastProvider, write_raw_snapshot
 from render import render_digest
 from state import load_state, save_state
+from redfin import load_redfin_references, apply_redfin
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -71,11 +73,23 @@ def run_send(settings: Dict[str, Any], provider: PropertyDataProvider) -> int:
 def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> TrackerRun:
     home_runs: List[HomeRun] = []
     generated = TrackerRun.now([]).generated_at
+    tracker = settings.get("tracker") or {}
+    references = load_redfin_references(resolve_repo_path(tracker.get("redfin_reference_path", "data/references/redfin.json")))
     for home in _home_configs(settings):
         payload = provider.fetch_home_market(home)
         write_raw_snapshot(_raw_snapshot_root(settings), home.id, payload, generated)
-        comps = normalize_comps(home, payload)
-        nearby_listings = normalize_nearby_listings(home, payload)
+        candidates = apply_redfin(normalize_candidates(home, payload), references)
+        comps = qualify_comps(home, candidates)
+        nearby_listings = qualify_comps(home, apply_redfin(normalize_nearby_listings(home, payload), references))
+        selected_ids = {comp.id for comp in comps}
+        evidence = {"schema_version": 1, "generated_at": generated, "home_id": home.id,
+                    "purpose": "Source comparison evidence; third-party claims are not verified ground truth.",
+                    "rentcast_payload": payload,
+                    "candidates": [{"passes_local_filters": comp.id in selected_ids,
+                                    "exclusion_reasons": qualification_reasons(home, comp),
+                                    "source_differences": _source_differences(comp),
+                                    "effective": asdict(comp)} for comp in candidates]}
+        write_raw_snapshot(resolve_repo_path(tracker.get("evidence_root", "data/evidence")), home.id, evidence, generated)
         avm_payload = payload.get("avm") if isinstance(payload.get("avm"), dict) else payload
         subject_property = avm_payload.get("subjectProperty") if isinstance(avm_payload.get("subjectProperty"), dict) else {}
         home_runs.append(
@@ -86,9 +100,24 @@ def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> Track
                 subject_property=subject_property,
                 nearby_listings=nearby_listings,
                 retrieval=[RetrievalInfo(**entry) for entry in payload.get("_retrieval", [])],
+                candidates=candidates,
             )
         )
     return TrackerRun(homes=home_runs, generated_at=generated)
+
+
+def _source_differences(comp) -> Dict[str, Any]:
+    original = comp.source_snapshots.get("rentcast", {})
+    effective = asdict(comp)
+    changes = {}
+    for field, source in comp.field_sources.items():
+        if field == "property_type":
+            before, after = original.get("source_property_types", {}), comp.source_property_types
+        else:
+            before, after = original.get(field), effective.get(field)
+        if before != after:
+            changes[field] = {"rentcast": before, "effective": after, "selected_source": source}
+    return changes
 
 
 def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
@@ -117,6 +146,8 @@ def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
                 year_built=_optional_str(raw_home.get("year_built")),
                 comp_square_footage=_optional_str(raw_home.get("comp_square_footage")),
                 comp_lot_size=_optional_str(raw_home.get("comp_lot_size")),
+                listing_bedrooms=_optional_str(raw_home.get("listing_bedrooms")),
+                listing_bathrooms=_optional_str(raw_home.get("listing_bathrooms")),
                 display_count=_optional_int(raw_home.get("display_count")),
                 close_listing_radius_miles=_optional_float(raw_home.get("close_listing_radius_miles")),
                 ranked_comp_bedrooms=_optional_str(raw_home.get("ranked_comp_bedrooms")),

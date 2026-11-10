@@ -20,9 +20,6 @@ class HomeEvidence:
     active: List[ComparableSale]
     window_days: int
     stale_active: int
-    context_sales: List[ComparableSale]
-    context_active: List[ComparableSale]
-    context_days: int
     unknown_type: int
 
 
@@ -41,7 +38,6 @@ def _evidence(home_run: HomeRun, as_of: datetime) -> HomeEvidence:
             if not (comp.raw.get("_sale_record") or {}).get("_identity_conflict")
             and not comp.raw.get("_listing_identity_conflict")]
     primary = [comp for comp in pool if cohort_for(home_run.home, comp) == "primary"]
-    context = [comp for comp in pool if cohort_for(home_run.home, comp) == "condo_context"]
     cap = min(home_run.home.days_old if home_run.home.days_old > 0 else 365, 365)
 
     def sales_in(rows, window):
@@ -68,10 +64,8 @@ def _evidence(home_run: HomeRun, as_of: datetime) -> HomeEvidence:
         if len(sales) >= 3:
             break
     active, stale = active_in(primary)
-    context_active, context_stale = active_in(context)
-    return HomeEvidence(home_run, sales, active, window, stale + context_stale,
-                        sales_in(context, cap), context_active, cap,
-                        sum(cohort_for(home_run.home, comp) == "unknown" for comp in pool))
+    return HomeEvidence(home_run, sales, active, window, stale,
+                        sum(cohort_for(home_run.home, comp) == "unknown" for comp in (home_run.candidates or pool) if not comp.raw.get("_is_subject")))
 
 
 def _summary(view: HomeEvidence) -> str:
@@ -107,11 +101,13 @@ def _classifications(comp: ComparableSale) -> str:
         return "來源房型未提供"
     if len(set(values.values())) == 1:
         return "來源房型：" + next(iter(values.values()))
-    names = {"property": "房屋紀錄", "listing": "掛牌", "avm": "AVM 候選"}
+    names = {"redfin": "Redfin", "property": "房屋紀錄", "listing": "掛牌", "avm": "AVM 候選"}
     return "來源房型：" + "；".join(f"{names.get(key, key)} {value}" for key, value in values.items())
 
 
 def _redfin_link(comp: ComparableSale) -> tuple[str, str]:
+    if comp.redfin_reference:
+        return comp.redfin_reference.url, f"Redfin 房源頁：{comp.address}（地址已核對）"
     if comp.redfin_url:
         return comp.redfin_url, f"Redfin 房源頁：{comp.address}（來源提供，請核對地址）"
     query = urlencode({"q": f'site:redfin.com "{comp.address}"'})
@@ -121,13 +117,13 @@ def _redfin_link(comp: ComparableSale) -> tuple[str, str]:
 def _details(comp: ComparableSale, kind: str, as_of: datetime) -> List[str]:
     if kind == "sale":
         sale = comp.recorded_sale
-        lines = [f"成交價 {_money(sale.price)} · 成交日期 {sale.transaction_date}", _attributes(comp), "來源：RentCast 房屋成交紀錄", _classifications(comp)]
+        lines = [f"成交價 {_money(sale.price)} · 成交日期 {sale.transaction_date}", _attributes(comp), ("來源：Redfin 成交紀錄" if sale.source == "redfin" else "來源：RentCast 房屋成交紀錄"), _classifications(comp)]
         if comp.sqft and comp.sqft > 0:
             lines.append(f"成交單價 {_money(sale.price / comp.sqft)}／sqft")
         gap = asking_gap(comp)
         if gap:
             sign = "+" if gap.amount >= 0 else "-"
-            lines.extend([f"售前開價參考 {_money(gap.observation.price)}（觀察日期 {gap.observation.observed_date}）",
+            lines.extend([f"售前開價參考 {_money(gap.observation.price)}（觀察日期 {gap.observation.observed_date}，來源 {gap.observation.source}）",
                           f"成交對開價參考落差 {sign}${abs(gap.amount):,.0f}（{gap.percent:+.1f}%）；非已確認最終／原始開價比。"])
             dom = source_dom(gap.observation.days_on_market)
             if dom is not None:
@@ -138,8 +134,19 @@ def _details(comp: ComparableSale, kind: str, as_of: datetime) -> List[str]:
         observed = _date(comp.last_seen_date)
         age = (as_of.date() - observed.date()).days
         lines = [f"開價 {_money(comp.listing_price)} · 最後觀察 {observed.date().isoformat()}（{age} 天前）", _attributes(comp), _classifications(comp)]
+        price_source = "Redfin MLS" if comp.field_sources.get("listing_price") == "redfin" else "RentCast 掛牌"
+        date_source = "Redfin MLS" if comp.field_sources.get("last_seen_date") == "redfin" else "RentCast 掛牌"
+        lines.append(f"開價來源：{price_source}；觀察日期來源：{date_source}。")
         dom = source_dom(comp.days_on_market)
-        lines.append(f"來源 DOM：{dom} 天（截至觀察日；非成交速度）。" if dom is not None else "來源 DOM：未提供有效數值。")
+        dom_label = "來源 DOM"
+        if comp.field_sources.get("days_on_market", "rentcast") == "rentcast":
+            lines.append("DOM 來源：RentCast 掛牌。")
+        if comp.field_sources.get("days_on_market") == "redfin" and comp.redfin_reference:
+            metric = comp.redfin_reference.field_evidence.get("days_on_market", {}).get("metric")
+            dom_label = "Redfin 累計 DOM" if metric == "cumulative_dom" else "Redfin 掛牌週期 DOM"
+        dom_date = (comp.source_snapshots.get("rentcast", {}).get("last_seen_date") if comp.field_sources.get("days_on_market") == "rentcast" else comp.last_seen_date) or comp.last_seen_date
+        lines.append(f"{dom_label}：{dom} 天（觀察日期 {str(dom_date)[:10]}；非成交速度）。" if dom is not None else "來源 DOM：未提供有效數值。")
+    lines.extend(_reference_details(comp))
     if comp.notes:
         lines.append("備註：" + "；".join(comp.notes))
     if comp.exclude_from_median:
@@ -147,13 +154,104 @@ def _details(comp: ComparableSale, kind: str, as_of: datetime) -> List[str]:
     return lines
 
 
+def _reference_details(comp: ComparableSale) -> List[str]:
+    reference = comp.redfin_reference
+    if reference is None:
+        return []
+    method = "公開頁面" if reference.source == "page" else "搜尋索引（僅導覽）"
+    lines = [f"Redfin {method}快照，查核 {reference.checked_at}；查核日不代表資料更新日。"]
+    labels = {"property_type": "房型", "status": "掛牌狀態", "last_seen_date": "掛牌觀察日期",
+              "beds": "房數", "baths": "衛浴", "sqft": "室內 sqft", "lot_size": "土地 sqft",
+              "year_built": "年份", "hoa_fee": "月管理費", "listing_price": "開價", "days_on_market": "來源 DOM"}
+    original = comp.source_snapshots.get("rentcast", {})
+    differences, adopted = [], []
+    for field, label in labels.items():
+        if comp.field_sources.get(field) != "redfin":
+            continue
+        before = original.get(field)
+        after = getattr(comp, field, None)
+        if field == "property_type":
+            before = next((original.get("source_property_types", {}).get(key) for key in ("property", "listing", "avm")
+                           if original.get("source_property_types", {}).get(key)), None)
+            after = comp.source_property_types.get("redfin")
+        if after is not None:
+            adopted.append(label)
+        if before != after:
+            differences.append(f"{label} RentCast {before if before is not None else '未提供'} → Redfin {after if after is not None else '未提供'}")
+    original_sale = original.get("recorded_sale")
+    if comp.field_sources.get("recorded_sale") == "redfin" and comp.recorded_sale:
+        current = comp.recorded_sale
+        if not original_sale or (original_sale["price"], original_sale["transaction_date"]) != (current.price, current.transaction_date):
+            before = f"{_money(original_sale['price'])}／{original_sale['transaction_date']}" if original_sale else "未提供"
+            differences.insert(0, f"成交 RentCast {before} → Redfin {_money(current.price)}／{current.transaction_date}")
+    if adopted:
+        lines.append("採用 Redfin：" + "、".join(adopted) + "；其他欄位依各自來源。")
+    if differences:
+        lines.append("主要差異：" + "；".join(differences[:2]) + ("；完整差異已保存在本機。" if len(differences) > 2 else "。"))
+    static_dates = {details.get("observed_at") for key, details in reference.field_evidence.items()
+                    if key in {"beds", "baths", "sqft", "property_type", "lot_size", "year_built", "hoa_fee"} and details.get("observed_at")}
+    if any(comp.field_sources.get(field) == "redfin" for field in ("beds", "baths", "sqft", "property_type")):
+        lines.append("Redfin 屬性來源日期：" + ("、".join(sorted(static_dates)) if static_dates else "未提供") + "。")
+    translations = {
+        "RentCast has a later": "RentCast 的掛牌或成交主張較新，與保存的 Redfin 事件尚未核對；目前掛牌指標暫不採用。",
+        "Same-date source status": "同日的狀態或 MLS 週期互有衝突，目前掛牌指標暫不採用。",
+        "Same-date transaction MLS": "同日成交的 MLS 識別不同，事件身分尚未核對，暫不計成交指標。",
+        "RentCast reports a later transaction": "RentCast 有較新的成交主張，Redfin 尚未對應確認；保留兩邊紀錄，暫不計成交指標。",
+        "RentCast reports a transaction after": "RentCast 的成交主張晚於保存的 Redfin 掛牌觀察，尚未確認該次成交。",
+        "RentCast reports a later or same-day": "歷史成交後又有 RentCast 掛牌主張，新的掛牌週期尚未核對。",
+        "Later RentCast observation matches": "同次 MLS 掛牌的狀態與開價一致，採 Redfin 資料日期；兩次觀察皆保留。",
+        "The sources describe different": "兩邊記錄的是不同日期交易；採用較新的 Redfin MLS 歷史成交，兩次事件皆保留。",
+        "Same-date compatible sale prices": "同次成交價格不同，依來源政策採 Redfin MLS，保留 RentCast 原值。",
+    }
+    for note in comp.reconciliation_notes:
+        lines.append("來源說明：" + next((text for prefix, text in translations.items() if note.startswith(prefix)), "來源事件尚待核對，原始說明與雙來源資料已保存在本機。"))
+    metric_evidence = reference.field_evidence.get("days_on_market", {})
+    if metric_evidence.get("metric") == "time_on_redfin":
+        days = source_dom(reference.values.get("days_on_market"))
+        if days is not None:
+            lines.append(f"Time on Redfin：{days} 天（來源日期 {metric_evidence.get('observed_at', '未提供')}；依 MLS 號碼計算，未當成一般 DOM）。")
+    if reference.facts:
+        lines.append("Redfin 補充：" + reference.facts[0])
+    return lines
+
+
+def _coverage_lines(view: HomeEvidence) -> List[str]:
+    candidates = [comp for comp in (view.home_run.candidates or view.home_run.comps) if not comp.raw.get("_is_subject")]
+    total = len(candidates)
+    matches = [comp for comp in candidates if comp.redfin_reference is not None]
+    adopted = sum(any(source == "redfin" and field != "redfin_url" and field not in comp.unresolved_fields
+                      for field, source in comp.field_sources.items()) for comp in matches)
+    if total:
+        lines = [f"Redfin 已核對連結 {len(matches)}/{total} 筆取得的獨立候選；其中 {adopted} 筆採用 Redfin 欄位。"]
+    else:
+        lines = ["本次未取得獨立候選，沒有可供核對的 Redfin 連結或欄位。"]
+    dates = sorted({comp.redfin_reference.checked_at for comp in matches})
+    if dates:
+        lines.append("Redfin 查核日期：" + (dates[0] if len(dates) == 1 else dates[0] + " 至 " + dates[-1]) + "；保存快照，非每週自動更新。")
+    else:
+        lines.append("目前沒有 Redfin 核對快照；新房源查找與頁面更新尚未自動化。")
+    excluded = sum(cohort_for(view.home_run.home, comp) == "excluded_condo" for comp in candidates)
+    unresolved = sum(bool(comp.unresolved_fields) for comp in candidates)
+    if excluded or unresolved:
+        lines.append(f"已排除 Condo／房型衝突 {excluded} 筆；另有事件待核對 {unresolved} 筆，受影響指標不計算。")
+    if view.home_run.home.property_type.lower() in {"townhouse", "townhome"}:
+        lines.append("Townhouse 為來源房型分類，產權與社區可比性未查核；已知 Condo 或分類衝突不納入。")
+    return lines
+
+
+def _search_scope(home_run: HomeRun) -> str:
+    home = home_run.home
+    parts = [label + str(value).replace(":", " 至 ") for label, value in
+             (("房數 ", home.listing_bedrooms), ("衛浴 ", home.listing_bathrooms)) if value]
+    return ("掛牌發現條件：" + "；".join(parts) + "。成交紀錄先依地理與日期廣搜，再套用最終條件。") if parts else ""
+
+
 def _sales_caption(view: HomeEvidence) -> str:
-    return f"近 {view.window_days} 天 · {len(view.sales)} 筆符合條件" + (" · 已擴大回溯期間" if view.window_days > 90 else "")
+    return ("【來源完整度未知】" if not view.home_run.retrieval else "【部分搜尋】" if any(not entry.complete for entry in view.home_run.retrieval) else "") + f"近 {view.window_days} 天 · {len(view.sales)} 筆符合條件" + (" · 已擴大回溯期間" if view.window_days > 90 else "")
 
 
 def _counts(view: HomeEvidence) -> str:
-    return (f"同房型 {view.window_days} 天內成交紀錄 {len(view.sales)} 筆 · 近 7 天觀察到的待售開價 {len(view.active)} 筆"
-            + (f"；另有 Condo 參考成交 {len(view.context_sales)} 筆（近 {view.context_days} 天，未併入同房型）" if view.context_sales else ""))
+    return ("【來源完整度未知】" if not view.home_run.retrieval else "【部分搜尋】" if any(not entry.complete for entry in view.home_run.retrieval) else "") + f"同房型 {view.window_days} 天內成交紀錄 {len(view.sales)} 筆 · 近 7 天觀察到的待售開價 {len(view.active)} 筆"
 
 
 def _subject_summary(home_run: HomeRun) -> str:
@@ -177,8 +275,11 @@ def _dom_caption(rows: List[ComparableSale]) -> str:
 
 
 def _health_lines(view: HomeEvidence) -> List[str]:
-    lines = []
+    lines = ["搜尋完成僅代表讀完本次條件；來源分類或尺寸錯誤，仍可能讓物件未被取得。"]
     metadata = view.home_run.retrieval
+    reference_count = sum(comp.redfin_reference is not None for comp in view.home_run.comps)
+    if reference_count:
+        lines.append(f"目前保留的候選中 {reference_count} 筆附 Redfin 查核快照；可用欄位優先採 Redfin，本機保留雙來源與差異。未建立新房源自動查找或網頁即時更新。")
     if not metadata:
         lines.append("未保存查詢頁數與範圍，來源搜尋完整性未知。")
     elif any(not entry.complete for entry in metadata):
@@ -229,7 +330,7 @@ def _criteria(home_run: HomeRun) -> str:
 
 def _plain_home(view: HomeEvidence, as_of: datetime) -> str:
     home = view.home_run.home
-    lines = [home.name, home.address, f"追蹤房屋： {_subject_summary(view.home_run)}", f"搜尋半徑 {home.max_radius_miles:g} 英里。", _criteria(view.home_run), _summary(view), "", "同房型成交紀錄", _sales_caption(view)]
+    lines = [home.name, home.address, f"追蹤房屋： {_subject_summary(view.home_run)}", f"搜尋半徑 {home.max_radius_miles:g} 英里。", _search_scope(view.home_run), _criteria(view.home_run), _summary(view), "", "同房型成交紀錄", _sales_caption(view)]
     if not view.sales:
         lines.append("查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。")
     lines.extend(_plain_rows(view.sales, "sale", as_of))
@@ -237,11 +338,6 @@ def _plain_home(view: HomeEvidence, as_of: datetime) -> str:
     if not view.active:
         lines.append("未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")
     lines.extend(_plain_rows(view.active, "active", as_of))
-    if view.context_sales or view.context_active:
-        lines.extend(["", "較廣分類參考：Condo", f"近 {view.context_days} 天成交 {len(view.context_sales)} 筆；近期待售 {len(view.context_active)} 筆。來源分類與追蹤的 Townhouse 不同，未併入同房型。", "參考成交紀錄"])
-        lines.extend(_plain_rows(view.context_sales, "sale", as_of))
-        if view.context_active:
-            lines.extend(["Condo 待售參考", _dom_caption(view.context_active), *_plain_rows(view.context_active, "active", as_of)])
     lines.extend(["", "資料完整度", *_health_lines(view)])
     return "\n".join(lines)
 
@@ -277,15 +373,9 @@ def _html_home(view: HomeEvidence, as_of: datetime) -> str:
         return "".join(result)
     parts = [f'<section style="margin-top:36px;"><h2 style="margin:0 0 8px;font-size:22px;line-height:1.4;color:#172f32;">{_esc(home.name)}</h2>',
              paragraph(home.address), paragraph("追蹤房屋：" + _subject_summary(view.home_run)),
-             paragraph(f"搜尋半徑 {home.max_radius_miles:g} 英里。"), paragraph(_criteria(view.home_run)),
+             paragraph(f"搜尋半徑 {home.max_radius_miles:g} 英里。"), paragraph(_search_scope(view.home_run)) if _search_scope(view.home_run) else "", paragraph(_criteria(view.home_run)),
              section("同房型成交紀錄", _sales_caption(view), view.sales, "sale", "查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。"),
              section("同房型目前待售開價", "僅列來源近 7 天仍觀察為待售的物件；開價不等於成交價。 " + _dom_caption(view.active), view.active, "active", "未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")]
-    if view.context_sales or view.context_active:
-        parts.extend(['<h3 style="margin:32px 0 4px;font-size:18px;color:#172f32;">較廣分類參考：Condo</h3>',
-                      paragraph(f"近 {view.context_days} 天成交 {len(view.context_sales)} 筆；近期待售 {len(view.context_active)} 筆。來源分類與追蹤的 Townhouse 不同，未併入同房型。"),
-                      section("Condo 參考成交紀錄", "僅作較廣分類的個別參考。", view.context_sales, "sale", "")])
-        if view.context_active:
-            parts.append(section("Condo 待售參考", _dom_caption(view.context_active), view.context_active, "active", ""))
     parts.extend(['<h3 style="margin:28px 0 4px;font-size:16px;color:#172f32;">資料完整度</h3>', *[paragraph(line) for line in _health_lines(view)], '</section>'])
     return "".join(parts)
 
@@ -300,12 +390,12 @@ def render_digest(run: TrackerRun, previous: TrackerState) -> Dict[str, str]:
     title = f"房市近況｜{len(views)} 間房的成交與待售資料"
     time_label = f"報告產生：{local_time}（太平洋時間）"
     baseline = "變化追蹤尚未啟用；本期不提供新增、降價或房價漲跌比較。"
-    disclaimer = "提供買賣判斷的市場證據，不是房屋估值或買賣建議。成交紀錄來自 RentCast 房屋資料；下架不代表成交。開價參考落差不是已確認的最終／原始開價比，也不代表議價幅度。"
+    disclaimer = "提供買賣判斷的市場證據，不是房屋估值或買賣建議。各欄位與成交紀錄依逐筆標示的來源；下架不代表成交。開價參考落差不是已確認的最終／原始開價比，也不代表議價幅度。"
     text = [title, time_label, "", "本期速覽"]
     overview = []
     for view in views:
-        text.extend([view.home_run.home.name, _counts(view), _summary(view), ""])
-        overview.append(f'<tr><td style="padding:16px 0;border-bottom:1px solid #dce3df;"><h2 style="margin:0 0 6px;font-size:17px;color:#172f32;">{_esc(view.home_run.home.name)}</h2><p style="margin:0 0 6px;font-size:15px;color:#1d6560;">{_esc(_counts(view))}</p><p style="margin:0;font-size:15px;color:#526866;">{_esc(_summary(view))}</p></td></tr>')
+        text.extend([view.home_run.home.name, _counts(view), _summary(view), *_coverage_lines(view), ""])
+        overview.append(f'<tr><td style="padding:16px 0;border-bottom:1px solid #dce3df;"><h2 style="margin:0 0 6px;font-size:17px;color:#172f32;">{_esc(view.home_run.home.name)}</h2><p style="margin:0 0 6px;font-size:15px;color:#1d6560;">{_esc(_counts(view))}</p><p style="margin:0;font-size:15px;color:#526866;">{_esc(_summary(view))}</p>' + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#526866;">{_esc(line)}</p>' for line in _coverage_lines(view)) + '</td></tr>')
     text.extend([baseline, "", *[_plain_home(view, as_of) for view in views], "", disclaimer])
     body = ('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + _esc(title) + '</title></head>'
             '<body style="margin:0;padding:0;background:#f3f5f1;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'Noto Sans TC\',Arial,sans-serif;font-size:16px;line-height:1.75;color:#172f32;">'
