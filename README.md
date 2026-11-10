@@ -88,7 +88,7 @@ data/
 
 ## 排程
 
-隨附的 LaunchAgent 在本機時間每週六上午 8:00 執行：
+隨附的 LaunchAgent 在每月 1、8、15、22 日，本機時間上午 8:00 執行，每月固定四個排程時點。現有 `weekly` 標籤與檔名保留，以便直接取代已安裝的工作：
 
 ```text
 bin/send-weekly
@@ -104,6 +104,8 @@ python3 bin/install-launchagent
 若使用儲存庫的 `.venv`，改執行 `.venv/bin/python bin/install-launchagent`。
 
 安裝程式會偵測儲存庫路徑與 Python 目錄，並建立日誌目錄。固定標籤為 `com.home-market-tracker.weekly`，不需要個人姓名。產生的 plist 位於儲存庫外的 `~/Library/LaunchAgents`。搬移儲存庫或更換 Python 環境後，重新執行安裝程式。安裝會取代同標籤的現有工作，不會寄信。
+
+四個排程時點不等於 API 用量硬上限。依目前兩間房的實測，每輪房源查詢 11 次，加上兩個 ZIP 每月各一次歷史查詢，正常月份約 46 次。額外分頁、手動預覽、重跑、失敗請求與其他共用帳戶的程式仍可能增加用量。正式剩餘額度與計費週期以 RentCast 儀表板為準；安裝排程不會清除已用額度，也不補跑過去日期。
 
 立即執行寄送：
 
