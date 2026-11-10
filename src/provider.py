@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Protocol
 from urllib.error import HTTPError, URLError
@@ -23,18 +24,20 @@ class PropertyDataProvider(Protocol):
 class RentCastProvider:
     """RentCast-backed provider using the valuation endpoint with sale comps."""
 
-    def __init__(self, base_url: str, api_key: str | None = None, timeout_seconds: int = 30):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout_seconds: int = 30, max_pages: int = 3):
+        if max_pages < 1:
+            raise ValueError("max_pages must be positive")
+        self.max_pages = max_pages
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or require_env("HOME_MARKET_RENTCAST_API_KEY")
         self.timeout_seconds = timeout_seconds
 
     def fetch_home_market(self, home: HomeConfig) -> Dict[str, Any]:
         avm = self.fetch_home_comps(home)
-        return {
-            "avm": avm,
-            "sale_listings": self.fetch_sale_listings(home),
-            "properties": self.fetch_properties(home),
-        }
+        listings = self.fetch_sale_listings(home)
+        properties = self.fetch_properties(home)
+        return {"avm": avm, "sale_listings": listings, "properties": properties,
+                "_retrieval": listings["searches"] + properties["searches"]}
 
     def fetch_home_comps(self, home: HomeConfig) -> Dict[str, Any]:
         params = {
@@ -57,34 +60,28 @@ class RentCastProvider:
         return self._get_json("/avm/value", params)
 
     def fetch_sale_listings(self, home: HomeConfig) -> Dict[str, Any]:
-        params = self._search_params(home)
-        return self._get_paginated_json("/listings/sale", params)
+        searches = []
+        records = []
+        for status in ("Inactive", "Active"):
+            params = {**self._search_params(home), "status": status}
+            result = self._get_paginated_json("/listings/sale", params, f"listings_{status.lower()}")
+            records.extend(result["records"])
+            searches.extend(result["searches"])
+        return {"records": records, "searches": searches}
 
     def fetch_properties(self, home: HomeConfig) -> Dict[str, Any]:
-        params = self._search_params(home)
-        params["saleDateRange"] = home.days_old
-        return self._get_paginated_json("/properties", params)
+        params = {"address": home.address, "radius": home.max_radius_miles,
+                  "saleDateRange": home.days_old if home.days_old > 0 else 365}
+        return self._get_paginated_json("/properties", params, "properties")
 
     def _search_params(self, home: HomeConfig) -> Dict[str, Any]:
-        params: Dict[str, Any] = {
-            "address": home.address,
-            "radius": home.max_radius_miles,
-            "propertyType": home.property_type,
-        }
-        if home.bedrooms:
-            params["bedrooms"] = home.bedrooms
-        if home.bathrooms:
-            params["bathrooms"] = home.bathrooms
+        types = "Townhouse|Condo" if home.property_type.lower() == "townhouse" else home.property_type
+        params: Dict[str, Any] = {"address": home.address, "radius": home.max_radius_miles,
+                                  "propertyType": types}
         if home.comp_square_footage:
             params["squareFootage"] = home.comp_square_footage
-        elif home.square_footage:
-            params["squareFootage"] = home.square_footage
         if home.comp_lot_size:
             params["lotSize"] = home.comp_lot_size
-        elif home.lot_size:
-            params["lotSize"] = home.lot_size
-        if home.year_built:
-            params["yearBuilt"] = home.year_built
         return params
 
     def _get_json(self, path: str, params: Dict[str, Any]) -> Any:
@@ -110,18 +107,25 @@ class RentCastProvider:
             raise ProviderError("RentCast returned an unexpected response.")
         return loaded
 
-    def _get_paginated_json(self, path: str, params: Dict[str, Any]) -> Any:
+    def _get_paginated_json(self, path: str, params: Dict[str, Any], source: str) -> Dict[str, Any]:
         page_size = 500
-        offset = 0
         records = []
-        while True:
-            page_params = {**params, "limit": page_size, "offset": offset}
-            loaded = self._get_json(path, page_params)
+        complete = False
+        pages = 0
+        for offset in range(0, page_size * self.max_pages, page_size):
+            loaded = self._get_json(path, {**params, "limit": page_size, "offset": offset})
             page = _response_records(loaded)
+            if any(not isinstance(record, dict) for record in page):
+                raise ProviderError("RentCast search returned an invalid property record.")
             records.extend(page)
+            pages += 1
             if len(page) < page_size:
-                return records
-            offset += page_size
+                complete = True
+                break
+        filters = {key: value for key, value in params.items() if key != "address"}
+        metadata = {"source": source, "rows": len(records), "pages": pages, "complete": complete,
+                    "filters": filters, "fetched_at": datetime.now(timezone.utc).isoformat()}
+        return {"records": records, "searches": [metadata]}
 
 
 def _response_records(value: Any) -> list[Any]:
@@ -132,7 +136,7 @@ def _response_records(value: Any) -> list[Any]:
             maybe = value.get(key)
             if isinstance(maybe, list):
                 return maybe
-    return []
+    raise ProviderError("RentCast search returned an unexpected records envelope.")
 
 
 def _http_error_detail(exc: HTTPError) -> str:

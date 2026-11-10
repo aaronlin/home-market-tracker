@@ -6,8 +6,10 @@ import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlsplit
 
-from models import ComparableSale, HomeConfig, RecordedSale
+from models import ComparableSale, HomeConfig, ListingObservation, RecordedSale
+from market_metrics import source_dom
 
 
 def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[ComparableSale]:
@@ -24,12 +26,16 @@ def normalize_comps(home: HomeConfig, payload: Dict[str, Any]) -> List[Comparabl
     for raw in _records(payload.get("properties")):
         _merge_record(merged, raw, source="property")
 
+    subject = avm_payload.get("subjectProperty") or {}
+    subject_lat, subject_lon = _float(subject.get("latitude")), _float(subject.get("longitude"))
     normalized = []
     cutoff = _cutoff_date(home.days_old)
     for raw in merged.values():
         if _normalized_address(_address(raw)) == subject_address:
             continue
-        comp = _normalize_comp(home, raw)
+        comp = _with_computed_distance(_normalize_comp(home, raw), raw, subject_lat, subject_lon)
+        if comp.distance_miles is not None and comp.distance_miles > home.max_radius_miles:
+            continue
         if not _within_lookback(comp, cutoff):
             continue
         normalized.append(comp)
@@ -52,7 +58,9 @@ def normalize_nearby_listings(home: HomeConfig, payload: Dict[str, Any]) -> List
     for raw in _records(payload.get("sale_listings")):
         if _normalized_address(_address(raw)) == subject_address:
             continue
-        comp = _normalize_comp(home, {**raw, "_sources": ["listing"]})
+        listing_records = {}
+        _merge_record(listing_records, raw, source="listing")
+        comp = _normalize_comp(home, next(iter(listing_records.values())))
         comp = _with_computed_distance(comp, raw, subject_lat, subject_lon)
         if comp.distance_miles is None or comp.distance_miles > home.close_listing_radius_miles:
             continue
@@ -138,7 +146,7 @@ def _normalize_comp(home: HomeConfig, raw: Dict[str, Any]) -> ComparableSale:
         removed_date=_str(_first_value(listing, ("removedDate", "dateRemoved", "saleDate", "soldDate"))),
         last_seen_date=_str(_first_value(listing, ("lastSeenDate",))),
         status=_str(_first_value(listing, ("status",))),
-        days_on_market=_int(_first_value(listing, ("daysOnMarket", "dom"))),
+        days_on_market=source_dom(_first_value(listing, ("daysOnMarket", "dom"))),
         price_per_sqft=ppsf,
         hoa_fee=hoa_fee,
         hoa_match=hoa_match,
@@ -146,6 +154,9 @@ def _normalize_comp(home: HomeConfig, raw: Dict[str, Any]) -> ComparableSale:
         exclude_from_median=exclude,
         raw=raw,
         recorded_sale=recorded_sale,
+        source_property_types=dict(raw.get("_source_property_types") or {}),
+        listing_observations=[ListingObservation(**item) for item in raw.get("_listing_observations", [])],
+        redfin_url=next((url for value in raw.get("_source_urls", []) if (url := _redfin_url(value))), None),
     )
 
 
@@ -157,7 +168,7 @@ def _with_computed_distance(comp: ComparableSale, raw: Dict[str, Any], subject_l
     distance = _distance_miles(subject_lat, subject_lon, lat, lon)
     if distance is None:
         return comp
-    return replace(comp, distance_miles=round(distance, 2))
+    return replace(comp, distance_miles=distance)
 
 
 def _distance_miles(lat1: float, lon1: float, lat2: Optional[float], lon2: Optional[float]) -> Optional[float]:
@@ -172,33 +183,7 @@ def _distance_miles(lat1: float, lon1: float, lat2: Optional[float], lon2: Optio
 
 
 def _with_rank_score(home: HomeConfig, comp: ComparableSale) -> ComparableSale:
-    score = _rank_score(home, comp)
-    return ComparableSale(
-        id=comp.id,
-        address=comp.address,
-        distance_miles=comp.distance_miles,
-        beds=comp.beds,
-        baths=comp.baths,
-        sqft=comp.sqft,
-        lot_size=comp.lot_size,
-        year_built=comp.year_built,
-        listing_price=comp.listing_price,
-        sold_price=comp.sold_price,
-        market_price=comp.market_price,
-        listed_date=comp.listed_date,
-        removed_date=comp.removed_date,
-        last_seen_date=comp.last_seen_date,
-        status=comp.status,
-        days_on_market=comp.days_on_market,
-        price_per_sqft=comp.price_per_sqft,
-        hoa_fee=comp.hoa_fee,
-        hoa_match=comp.hoa_match,
-        notes=comp.notes,
-        exclude_from_median=comp.exclude_from_median,
-        rank_score=score,
-        raw=comp.raw,
-        recorded_sale=comp.recorded_sale,
-    )
+    return replace(comp, rank_score=_rank_score(home, comp))
 
 
 def _rank_score(home: HomeConfig, comp: ComparableSale) -> float:
@@ -305,8 +290,19 @@ def _merge_record(merged: Dict[str, Dict[str, Any]], raw: Dict[str, Any], source
     key = _normalized_address(address)
     existing = merged.setdefault(key, {})
     previous_units = _explicit_units(existing)
+    incoming_units = _explicit_units(raw)
+    existing["_listing_identity_conflict"] = bool(existing.get("_listing_identity_conflict")) or (
+        len(previous_units) > 1 or len(incoming_units) > 1
+        or bool(previous_units and incoming_units and previous_units != incoming_units)
+    )
+    classification = raw.get("propertyType")
+    if isinstance(classification, str) and classification.strip():
+        existing.setdefault("_source_property_types", {})[source] = classification.strip()
+    existing.setdefault("_source_urls", []).extend(raw[key] for key in ("listingUrl", "redfinUrl", "url") if isinstance(raw.get(key), str))
+    if source == "listing":
+        existing.setdefault("_listing_observations", []).extend(_listing_observations(raw))
     sources = set(existing.get("_sources") or [])
-    existing.update({key: value for key, value in raw.items() if key not in {"_sources", "_sale_record", "_listing_record"} and value is not None and value != ""})
+    existing.update({key: value for key, value in raw.items() if not key.startswith("_") and value is not None and value != ""})
     if source in {"listing", "avm"}:
         listing_keys = ("listPrice", "listingPrice", "originalListPrice", "price", "listedDate", "dateListed", "removedDate", "dateRemoved", "saleDate", "soldDate", "lastSeenDate", "status", "daysOnMarket", "dom")
         existing["_listing_record"] = {key: raw[key] for key in listing_keys if key in raw}
@@ -470,3 +466,46 @@ def _str(value: Any) -> Optional[str]:
     if value in {None, ""}:
         return None
     return str(value)[:10]
+
+
+def _listing_observations(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # Only called for actual listing endpoint rows; never property or AVM prices.
+    result = []
+    history = raw.get("history")
+    entries = list(history.values()) if isinstance(history, dict) else history if isinstance(history, list) else []
+    for index, entry in enumerate([raw] + [item for item in entries if isinstance(item, dict)]):
+        price = _int(_first_value(entry, ("price", "listPrice", "listingPrice")))
+        listed = _str(_first_value(entry, ("listedDate", "dateListed")))
+        observed = _str(entry.get("lastSeenDate"))
+        removed = _str(_first_value(entry, ("removedDate", "dateRemoved")))
+        if (index and not observed and listed == _str(raw.get("listedDate"))
+                and removed == _str(raw.get("removedDate"))
+                and price == _int(_first_value(raw, ("price", "listPrice", "listingPrice")))
+                and entry.get("mlsNumber") in (None, "", raw.get("mlsNumber"))):
+            continue
+        mls = entry.get("mlsNumber")
+        if not mls and index and listed and listed == _str(raw.get("listedDate")):
+            current_removed = _str(raw.get("removedDate"))
+            if removed == current_removed or (not removed and not current_removed):
+                mls = raw.get("mlsNumber")
+        if price is not None or listed or observed:
+            result.append(dict(price=price if price is not None else 0, observed_date=observed or "", listed_date=listed or "",
+                               removed_date=removed, mls_number=str(mls) if mls else None,
+                               days_on_market=source_dom(_first_value(entry, ("daysOnMarket", "dom"))),
+                               source="listing" if index == 0 else "listing.history"))
+    return result
+
+
+def _redfin_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or any(character.isspace() for character in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme != "https" or parsed.netloc not in {"redfin.com", "www.redfin.com"}
+                or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment
+                or any(segment in {".", ".."} for segment in parsed.path.split("/"))
+                or not re.fullmatch(r"/(?:[A-Za-z0-9_.~-]+/)*home/[0-9]+", parsed.path)):
+            return None
+        return value
+    except ValueError:
+        return None

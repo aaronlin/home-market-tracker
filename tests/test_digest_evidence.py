@@ -28,11 +28,12 @@ class DigestEvidenceTests(unittest.TestCase):
         self.at = "2026-11-09T16:00:00+00:00"
 
     def digest(self, rows, home=None):
+        rows = [replace(row, source_property_types={'listing': (home or self.home).property_type}) if not row.source_property_types else row for row in rows]
         return render_digest(TrackerRun([HomeRun(home or self.home, rows)], self.at), TrackerState())
 
     def sale(self, ident="sale", day="2026-10-15", price=1800000, **kwargs):
         return ComparableSale(ident, f"{ident} Synthetic Road", sold_price=price,
-                              recorded_sale=RecordedSale(price, day, "property.lastSale"), **kwargs)
+                              recorded_sale=RecordedSale(price, day, "property.lastSale"), source_property_types={"property": self.home.property_type}, **kwargs)
 
     def test_separates_source_supported_sales_from_current_asks(self):
         sale = self.sale()

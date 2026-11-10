@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from app_config import SetupError, load_dotenv, load_settings, resolve_repo_path
 from deliver import send_email
-from models import HomeConfig, HomeRun, TrackerRun
+from models import HomeConfig, HomeRun, RetrievalInfo, TrackerRun
 from normalize import extract_value_estimate, normalize_comps, normalize_nearby_listings
 from provider import PropertyDataProvider, RentCastProvider, write_raw_snapshot
 from render import render_digest
@@ -85,6 +85,7 @@ def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> Track
                 value_estimate=extract_value_estimate(payload),
                 subject_property=subject_property,
                 nearby_listings=nearby_listings,
+                retrieval=[RetrievalInfo(**entry) for entry in payload.get("_retrieval", [])],
             )
         )
     return TrackerRun(homes=home_runs, generated_at=generated)

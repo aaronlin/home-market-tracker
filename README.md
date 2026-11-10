@@ -2,7 +2,7 @@
 
 Weekly, API-first market evidence report for configured homes. The email separates source-recorded sales from recently observed active asking prices. It supports monitoring, not a home valuation or a market appreciation estimate.
 
-Each run uses up to three RentCast requests per configured home:
+Each run uses three RentCast data sources per home. Active/inactive searches and pagination mean more than three billable requests can be made:
 
 - `/avm/value` for AVM context and comparable candidates
 - `/listings/sale` for status, listed price, listed date, removed date, last seen date, and DOM
@@ -10,13 +10,15 @@ Each run uses up to three RentCast requests per configured home:
 
 ## Report contents
 
-Each home gets an evidence summary before detailed rows. Recorded sale prices require a paired transaction date from property records. The report starts with a 90-day sale window and expands up to the configured lookback (capped at 365 days) when fewer than three records are available. It shows the window, eligible count, and up to three latest rows rather than a mixed-price median.
+Each home gets a summary before detailed rows. The report supports buy/sell deliberation with evidence, rather than an automated recommendation or subject valuation. It separates same-type recorded sales, recently observed active asks, and broader Condo context for a Townhouse target. Property-record classification takes precedence, and disagreements with listing classification stay visible.
 
-Active asking rows require a positive listed price and a source last-active observation within seven calendar days. Missing or stale evidence is explicit. An inactive listing is not treated as a closed sale. Existing property annotations remain on displayed eligible rows. Both categories use the configured similarity rules before their independent three-row limits.
+Recorded sale prices require a paired transaction date from property records. The report starts with a 90-day same-type sale window and expands up to the configured lookback (capped at 365 days) when fewer than three records are available. It shows windows/counts and up to three latest rows per category, without mixed-price medians or unsupported appreciation/new-inventory claims. Legacy successful-run state remains compatible and does not supply these new metrics.
 
-The first repair intentionally omits appreciation percentages and new-inventory claims. Existing successful-run state is retained, but does not support reliable event comparisons yet. Acquisition filters, provider and scheduling remain unchanged. The next increments can test broader acquisition and introduce a versioned event baseline separately.
+Active asking rows require a positive current price and source last-active observation within seven days. Source DOM must be a nonnegative integer, with zero preserved. It is not listing-to-contract or listing-to-close duration. A dated asking-reference gap appears only with compatible identity, dated pre-sale observation/removal, an unambiguous MLS episode and at most 90 days between observation and transaction. It remains an unconfirmed reference, not a final/original-list ratio or negotiated discount. Ambiguity is unavailable, not zero.
 
-See [the API price and tradeoff comparison (Traditional Chinese)](docs/api-comparison.md), [product context](PRODUCT.md), and [email design](DESIGN.md).
+Property discovery uses geography and the sale-date window instead of exact subject bed/bath/year/lot constraints. Explicit comparable size/lot ranges and ranked filters remain local eligibility rules. Listing searches request Active and Inactive separately and include Condo as context for Townhouse targets. Pagination is bounded at three pages per search by default; incomplete/missing acquisition metadata is visible. A failed request still aborts the run and cannot masquerade as empty inventory.
+
+Each displayed row links to a safe source-provided Redfin page when available, otherwise an honestly labeled Google search restricted to Redfin. Rendering makes no external request. No automated Redfin ingestion is configured. See [market metric definitions and the search diagnosis](docs/market-evidence.md), [API prices and tradeoffs](docs/api-comparison.md), [product context](PRODUCT.md), and [email design](DESIGN.md).
 
 ## Setup
 

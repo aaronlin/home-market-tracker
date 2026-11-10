@@ -231,7 +231,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
         home = HomeConfig("home", "Home & <North>", "1 Main St", "Townhouse", 1.5, 180, 10)
         comp = ComparableSale(
             id="sample", address=address, status="Active", sqft=1500,
-            listing_price=900000, last_seen_date="2026-05-05", notes=["Keep original note & <detail>"],
+            listing_price=900000, source_property_types={"listing": "Townhouse"}, last_seen_date="2026-05-05", notes=["Keep original note & <detail>"],
         )
         digest = render_digest(TrackerRun([HomeRun(home, [comp])], "2026-05-06T00:00:00+00:00"), TrackerState())
         self.assertEqual(digest["subject"], "房市近況｜1 間房的成交與待售資料")
@@ -494,8 +494,8 @@ class HomeMarketTrackerTests(unittest.TestCase):
         )
         payload = {
             "comparables": [
-                {"formattedAddress": "400 Busy Road Ave, Example City, CA 90000", "price": 1000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
-                {"formattedAddress": "Good Comp, Example City, CA 90000", "price": 2000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
+                {"formattedAddress": "400 Busy Road Ave, Example City, CA 90000", "propertyType": "Single Family", "price": 1000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
+                {"formattedAddress": "Good Comp, Example City, CA 90000", "propertyType": "Single Family", "price": 2000000, "status": "Active", "lastSeenDate": "2026-05-05", "squareFootage": 1000},
             ]
         }
         comps = normalize_comps(home, payload)
@@ -547,7 +547,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
             same_hoa_addresses=["210 Example Ln, Sampletown, CA 90000"],
         )
         payload = {
-            "comparables": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "price": 1995000, "status": "Active", "lastSeenDate": "2026-05-05"}],
+            "comparables": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "propertyType": "Townhouse", "price": 1995000, "status": "Active", "lastSeenDate": "2026-05-05"}],
             "properties": [{"formattedAddress": "210 Example Ln, Sampletown, CA 90000", "hoa": {"fee": 815}}],
         }
         comp = normalize_comps(home, payload)[0]
@@ -582,8 +582,8 @@ class HomeMarketTrackerTests(unittest.TestCase):
         provider = PagingProvider()
         home = HomeConfig("home", "Home", "1 Main", "Single Family", 1.5, 365, 25)
         listings = provider.fetch_sale_listings(home)
-        self.assertEqual(len(listings), 501)
-        self.assertEqual([request[1]["offset"] for request in provider.requests], [0, 500])
+        self.assertEqual(len(listings["records"]), 1002)
+        self.assertEqual([request[1]["offset"] for request in provider.requests], [0, 500, 0, 500])
         self.assertTrue(all(request[1]["limit"] == 500 for request in provider.requests))
 
     def test_preview_writes_files_without_state(self):

@@ -22,7 +22,7 @@ class SaleEvidenceTests(unittest.TestCase):
         self.address = "100 Example St, Sample City, CA"
 
     def property_record(self, **fields):
-        return {"formattedAddress": self.address, "_sources": ["property"], **fields}
+        return {"formattedAddress": self.address, "propertyType": "Single Family", "_sources": ["property"], **fields}
 
     def test_property_only_paired_sale_survives_and_ranks_by_transaction(self):
         payload = {"properties": [self.property_record(lastSalePrice=900000, lastSaleDate="2026-10-01T12:00:00Z")]}
@@ -145,8 +145,8 @@ class SaleEvidenceTests(unittest.TestCase):
         from models import HomeRun, TrackerRun
         from render import render_digest
         from state import TrackerState
-        rows = [{"formattedAddress": self.address, "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 999000, "price": 950000},
-                {"formattedAddress": "200 Synthetic St", "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 850000}]
+        rows = [{"formattedAddress": self.address, "propertyType": "Single Family", "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 999000, "price": 950000},
+                {"formattedAddress": "200 Synthetic St", "propertyType": "Single Family", "status": "Active", "lastSeenDate": "2026-11-09", "originalListPrice": 850000}]
         comps = normalize_comps(self.home, {"sale_listings": rows})
         body = render_digest(TrackerRun([HomeRun(self.home, comps)], "2026-11-09T16:00:00+00:00"), TrackerState())["text_body"]
         self.assertIn("開價 $950,000", body)

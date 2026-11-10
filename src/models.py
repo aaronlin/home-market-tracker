@@ -42,6 +42,27 @@ class RecordedSale:
 
 
 @dataclass(frozen=True)
+class ListingObservation:
+    price: int
+    observed_date: str
+    listed_date: str
+    removed_date: Optional[str]
+    mls_number: Optional[str]
+    days_on_market: Optional[int]
+    source: str
+
+
+@dataclass(frozen=True)
+class RetrievalInfo:
+    source: str
+    rows: int
+    pages: int
+    complete: bool
+    filters: Dict[str, Any] = field(default_factory=dict)
+    fetched_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ComparableSale:
     id: str
     address: str
@@ -67,6 +88,9 @@ class ComparableSale:
     rank_score: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
     recorded_sale: Optional[RecordedSale] = None
+    source_property_types: Dict[str, str] = field(default_factory=dict)
+    listing_observations: List[ListingObservation] = field(default_factory=list)
+    redfin_url: Optional[str] = None
 
     @property
     def sale_price(self) -> Optional[int]:
@@ -84,6 +108,7 @@ class HomeRun:
     value_estimate: Optional[int] = None
     subject_property: Dict[str, Any] = field(default_factory=dict)
     nearby_listings: List[ComparableSale] = field(default_factory=list)
+    retrieval: List[RetrievalInfo] = field(default_factory=list)
 
     @property
     def ranked_comps(self) -> List[ComparableSale]:
