@@ -112,6 +112,66 @@ def _field_evidence(record: dict, latest: date) -> dict:
     return deepcopy(evidence)
 
 
+def _history_observations(record: dict, sale: RecordedSale | None, latest: date) -> list[ListingObservation]:
+    """Pair structured MLS history, never prices extracted from free-form facts."""
+    history = record.get('sale_history', [])
+    if not isinstance(history, list):
+        raise ValueError('sale_history must be a list')
+    events = []
+    kinds = {'listed', 'price_changed', 'pending', 'contingent', 'sold', 'delisted', 'cancelled', 'rental_listed', 'rented'}
+    for raw in history:
+        if not isinstance(raw, dict) or raw.get('event') not in kinds:
+            raise ValueError('sale_history requires a recognized event')
+        event = dict(raw)
+        event['source_group'] = raw.get('source_group', 'mls_history')
+        if event['source_group'] not in _GROUPS:
+            raise ValueError('history source_group is unsupported')
+        event['date'] = _date(raw.get('date'), 'history date', latest)
+        if raw.get('event') in {'rental_listed', 'rented'}:
+            continue
+        event['mls_number'] = _text(raw, 'mls_number')
+        if raw['event'] in {'listed', 'price_changed', 'sold'}:
+            event['price'] = (_number(raw['price'], 'history price', True, False)
+                              if raw.get('price') is not None else None)
+        if event not in events:
+            events.append(event)
+    # Redfin may repeat one dated MLS event with its price masked in one row.
+    # Coalesce only when the same source, MLS, date and event also supplies a price.
+    priced_keys = {(e['event'], e['date'], e['mls_number'], e['source_group'])
+                   for e in events if e.get('price') is not None}
+    events = [e for e in events if not ('price' in e and e['price'] is None
+              and (e['event'], e['date'], e['mls_number'], e['source_group']) in priced_keys)]
+    sale_group = (record.get('recorded_sale') or {}).get('source_group',
+        record.get('field_evidence', {}).get('recorded_sale', {}).get('source_group', record.get('source_group', 'unknown')))
+    if not sale or record.get('source') != 'page' or sale_group != 'mls_history':
+        return []
+    closes = [e for e in events if e['event'] == 'sold' and e['date'] == sale.transaction_date
+              and e['price'] == sale.price]
+    if len(closes) != 1:
+        return []
+    close = closes[0]
+    sale_mls = (record.get('recorded_sale') or {}).get('mls_number')
+    if sale_mls and sale_mls != close['mls_number']:
+        return []
+    episode = [e for e in events if e['mls_number'] == close['mls_number'] and e['date'] <= close['date']]
+    starts = [e for e in episode if e['event'] == 'listed']
+    if len(starts) != 1:
+        return []
+    start = starts[0]['date']
+    if any(e['event'] in {'delisted', 'cancelled'} or e['date'] < start
+           or e['source_group'] not in {'mls_listing', 'mls_history'} for e in episode):
+        return []
+    if any(e['mls_number'] != close['mls_number'] and start <= e['date'] <= close['date'] for e in events):
+        return []
+    if sum(e['event'] == 'sold' for e in episode) != 1:
+        return []
+    asks = [e for e in episode if e['event'] in {'listed', 'price_changed'}]
+    if any(e['price'] is None for e in asks):
+        return []
+    return [ListingObservation(e['price'], e['date'], start, close['date'], close['mls_number'], None, 'redfin')
+            for e in asks]
+
+
 def _reference(record: Any) -> RedfinReference:
     if not isinstance(record, dict):
         raise ValueError('reference must be an object')
@@ -209,6 +269,7 @@ def _reference(record: Any) -> RedfinReference:
         observations.append(ListingObservation(
             _number(raw.get('price'), 'observation price', True, False), observed, start, removed,
             mls, _number(dom, 'observation DOM', True, True) if dom is not None else None, 'redfin'))
+    observations.extend(_history_observations(record, sale, latest))
     return RedfinReference(address, matched, url, checked, source, list(facts), values, sale, observations,
                            deepcopy(record), source_group, field_evidence, ownership)
 
@@ -240,9 +301,11 @@ def _original_comp(comp: ComparableSale) -> ComparableSale:
 
 
 def _observations(reference: RedfinReference) -> list[ListingObservation]:
-    return [observation for observation, raw in zip(reference.listing_observations,
-                                                  reference.raw.get('listing_observations', []))
-            if raw.get('source_group', reference.source_group) in {'mls_listing', 'mls_history'}]
+    explicit_count = len(reference.raw.get('listing_observations', []))
+    explicit = [observation for observation, raw in zip(reference.listing_observations[:explicit_count],
+                                                       reference.raw.get('listing_observations', []))
+                if raw.get('source_group', reference.source_group) in {'mls_listing', 'mls_history'}]
+    return explicit + reference.listing_observations[explicit_count:]
 
 
 def apply_redfin(comps: Iterable[ComparableSale], references: Dict[str, RedfinReference]) -> list[ComparableSale]:
@@ -376,6 +439,9 @@ def apply_redfin(comps: Iterable[ComparableSale], references: Dict[str, RedfinRe
             if (rf_sale and rc_observed and rc_observed >= rf_sale.transaction_date and comp.status
                     and comp.status not in {'Sold', 'Inactive'} and not has_listing):
                 withhold_listing('RentCast reports a later or same-day listing episode after the Redfin historical sale; current status remains unresolved.')
+                if 'recorded_sale' not in unresolved:
+                    changes['listing_observations'] = _observations(reference)
+                    sources['listing_observations'] = 'redfin'
 
         if 'recorded_sale' not in unresolved and ('recorded_sale' in changes or 'sqft' in changes):
             sale = changes.get('recorded_sale', comp.recorded_sale)

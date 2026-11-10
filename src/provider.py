@@ -62,11 +62,12 @@ class RentCastProvider:
     def fetch_sale_listings(self, home: HomeConfig) -> Dict[str, Any]:
         searches = []
         records = []
-        for status in ("Inactive", "Active"):
-            params = {**self._search_params(home), "status": status}
-            result = self._get_paginated_json("/listings/sale", params, f"listings_{status.lower()}")
-            records.extend(result["records"])
-            searches.extend(result["searches"])
+        for property_type in home.comparable_property_types or [home.property_type]:
+            for status in ("Inactive", "Active"):
+                params = {**self._search_params(home), "propertyType": property_type, "status": status}
+                result = self._get_paginated_json("/listings/sale", params, f"listings_{status.lower()}")
+                records.extend(result["records"])
+                searches.extend(result["searches"])
         return {"records": records, "searches": searches}
 
     def fetch_properties(self, home: HomeConfig) -> Dict[str, Any]:

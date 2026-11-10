@@ -519,6 +519,7 @@ class HomeMarketTrackerTests(unittest.TestCase):
                         "comparables": [
                             {
                                 "formattedAddress": f"{index} Comp St",
+                                "propertyType": "Single Family",
                                 "price": price,
                                 "squareFootage": 100,
                                 "distance": index / 10,

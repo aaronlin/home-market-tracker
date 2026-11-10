@@ -65,7 +65,7 @@ def qualification_reasons(home: HomeConfig, comp: ComparableSale, final: bool = 
     if not final:
         return reasons
     cohort = cohort_for(home, comp)
-    if cohort != "primary":
+    if cohort not in {"primary", "secondary"}:
         reasons.append(cohort)
     from models import _number_in_range
     for field, bounds in (("beds", home.ranked_comp_bedrooms), ("baths", home.ranked_comp_bathrooms),

@@ -6,6 +6,17 @@ from statistics import median
 from typing import Any, Dict, List, Optional
 
 
+def canonical_property_type(value: str) -> Optional[str]:
+    kind = "".join(character for character in value.lower() if character.isalnum())
+    if kind in {"singlefamily", "singlefamilyresidential", "singlefamilyhome", "sfh"}:
+        return "Single Family"
+    if kind in {"townhouse", "townhome", "townhomes"}:
+        return "Townhouse"
+    if kind in {"condo", "condominium", "condocoop", "condominiumownership"}:
+        return "Condo"
+    return None if kind in {"", "unknown", "other", "none"} else kind
+
+
 @dataclass(frozen=True)
 class HomeConfig:
     id: str
@@ -34,6 +45,7 @@ class HomeConfig:
     comp_annotations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     same_hoa_addresses: List[str] = field(default_factory=list)
     same_hoa_patterns: List[str] = field(default_factory=list)
+    comparable_property_types: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -117,6 +129,15 @@ class ComparableSale:
     reconciliation_notes: List[str] = field(default_factory=list)
 
     @property
+    def market_property_type(self) -> Optional[str]:
+        if (self.redfin_reference and self.redfin_reference.ownership == "condominium"
+                or any(canonical_property_type(value) == "Condo" for value in self.source_property_types.values())):
+            return "Condo"
+        classification = next((self.source_property_types[source] for source in
+                               ("redfin", "property", "listing", "avm") if self.source_property_types.get(source)), "")
+        return canonical_property_type(classification)
+
+    @property
     def sale_price(self) -> Optional[int]:
         if "recorded_sale" in self.unresolved_fields or "sale_price" in self.unresolved_fields:
             return None
@@ -143,8 +164,7 @@ class HomeRun:
 
     @property
     def ranked_comps(self) -> List[ComparableSale]:
-        from market_metrics import cohort_for
-        return [comp for comp in self.comps if cohort_for(self.home, comp) != "excluded_condo"
+        return [comp for comp in self.comps if comp.market_property_type != "Condo"
                 and self._passes_ranked_comp_filters(comp)]
 
     @property
@@ -156,7 +176,12 @@ class HomeRun:
 
     @property
     def final_comps(self) -> List[ComparableSale]:
-        return [comp for comp in self.selected_comps if not comp.exclude_from_median][:5]
+        subject_type = canonical_property_type(self.home.property_type)
+        primary = [comp for comp in self.ranked_comps
+                   if comp.market_property_type == subject_type and subject_type in {"Single Family", "Townhouse"}]
+        if self.home.display_count and self.home.display_count > 0:
+            primary = primary[:self.home.display_count]
+        return [comp for comp in primary if not comp.exclude_from_median][:5]
 
     @property
     def median_sale_price(self) -> Optional[float]:

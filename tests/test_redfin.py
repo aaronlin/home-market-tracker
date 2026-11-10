@@ -79,6 +79,67 @@ class RedfinTests(unittest.TestCase):
         self.assertEqual(asking_gap(result).amount, -50000)
         self.assertEqual(asking_gap(result).observation.source, 'redfin')
 
+    def history_record(self):
+        record = deepcopy(self.record)
+        record['recorded_sale'] = {'price': 2600000, 'transaction_date': '2026-10-23',
+                                   'source_group': 'mls_history', 'mls_number': 'RF1'}
+        record['sale_history'] = [
+            {'event': 'listed', 'date': '2026-10-01', 'price': 2359000, 'mls_number': 'RF1'},
+            {'event': 'pending', 'date': '2026-10-08', 'mls_number': 'RF1'},
+            {'event': 'sold', 'date': '2026-10-23', 'price': 2600000, 'mls_number': 'RF1'},
+            {'event': 'rental_listed', 'date': '2026-10-28', 'price': 5198},
+        ]
+        return record
+
+    def test_structured_redfin_history_supplies_gap_without_inventing_dom(self):
+        record = self.history_record()
+        result = apply_redfin([self.comp], self.load(record))[0]
+        gap = asking_gap(result)
+        self.assertIsNotNone(gap)
+        self.assertEqual(gap.amount, 241000)
+        self.assertAlmostEqual(gap.percent, 10.216193302246715)
+        self.assertEqual(gap.observation.source, 'redfin')
+        self.assertIsNone(gap.observation.days_on_market)
+        self.assertEqual(result.source_snapshots['redfin'], record)
+        self.assertEqual(asdict(result), asdict(apply_redfin([result], self.load(record))[0]))
+
+    def test_history_uses_latest_priced_change_and_deduplicates_exact_events(self):
+        record = self.history_record()
+        record['sale_history'].append(deepcopy(record['sale_history'][0]))
+        record['sale_history'].append({**record['sale_history'][0], 'price': None})
+        record['sale_history'].append({'event': 'price_changed', 'date': '2026-10-05',
+                                       'price': 2500000, 'mls_number': 'RF1'})
+        record['sale_history'][1]['price'] = 9999999  # Pending price is not an asking-price event.
+        result = apply_redfin([self.comp], self.load(record))[0]
+        self.assertEqual(asking_gap(result).amount, 100000)
+        self.assertEqual(asking_gap(result).observation.observed_date, '2026-10-05')
+
+    def test_history_gap_survives_later_unresolved_current_listing(self):
+        record = self.history_record()
+        comp = replace(self.comp, status='Active', last_seen_date='2026-10-29')
+        result = apply_redfin([comp], self.load(record))[0]
+        self.assertIsNone(result.status)
+        self.assertEqual(asking_gap(result).amount, 241000)
+
+    def test_ambiguous_redfin_history_does_not_supply_gap(self):
+        modifications = [
+            lambda r: r['sale_history'][2].update(mls_number='OTHER'),
+            lambda r: r['sale_history'][0].update(source_group='estimate'),
+            lambda r: r['sale_history'][2].update(source_group='public_record'),
+            lambda r: r['sale_history'][2].update(price=2500000),
+            lambda r: r['sale_history'][2].update(date='2026-10-22'),
+            lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-03', 'price': None, 'mls_number': 'RF1'}),
+            lambda r: r['sale_history'].append({'event': 'listed', 'date': '2026-10-09', 'price': 2400000, 'mls_number': 'RF2'}),
+            lambda r: r['sale_history'].append({'event': 'delisted', 'date': '2026-10-09', 'mls_number': 'RF1'}),
+            lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-01', 'price': 2400000, 'mls_number': 'RF1'}),
+        ]
+        for change in modifications:
+            record = self.history_record()
+            change(record)
+            with self.subTest(history=record['sale_history']):
+                result = apply_redfin([self.comp], self.load(record))[0]
+                self.assertIsNone(asking_gap(result))
+
     def test_search_index_values_are_supplemental_not_authoritative(self):
         record = deepcopy(self.record)
         record['source'] = 'search_index'

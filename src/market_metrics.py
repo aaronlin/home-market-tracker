@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from models import ComparableSale, HomeConfig, ListingObservation
+from models import ComparableSale, HomeConfig, ListingObservation, canonical_property_type
 
 
 def source_dom(value: Any) -> Optional[int]:
@@ -20,28 +20,17 @@ def source_dom(value: Any) -> Optional[int]:
     return int(number)
 
 
-def _type(value: str) -> str:
-    return "".join(character for character in value.lower() if character.isalnum())
-
-
 def cohort_for(home: HomeConfig, comp: ComparableSale) -> str:
-    condo_kinds = {"condo", "condominium", "condocoop", "condominiumownership"}
-    ownership = getattr(comp.redfin_reference, "ownership", "unknown") if comp.redfin_reference else "unknown"
-    if ownership == "condominium" or any(_type(value) in condo_kinds for value in comp.source_property_types.values()):
+    kind = comp.market_property_type
+    if kind == "Condo":
         return "excluded_condo"
-    classification = next((comp.source_property_types[source] for source in
-                           ("redfin", "property", "listing", "avm") if comp.source_property_types.get(source)), "")
-    kind, subject = _type(classification), _type(home.property_type)
-    if not kind or kind in {"unknown", "other", "none"}:
+    if kind is None:
         return "unknown"
-    if subject in {"singlefamily", "sfh"}:
-        subject = "singlefamily"
-    if kind in {"singlefamilyresidential", "singlefamilyhome", "sfh"}:
-        kind = "singlefamily"
-    if kind in {"townhome", "townhomes"}:
-        kind = "townhouse"
-    if kind == subject and kind in {"singlefamily", "townhouse"}:
+    subject = canonical_property_type(home.property_type)
+    if kind == subject and kind in {"Single Family", "Townhouse"}:
         return "primary"
+    if kind in {"Single Family", "Townhouse"} and kind in home.comparable_property_types:
+        return "secondary"
     return "other"
 
 

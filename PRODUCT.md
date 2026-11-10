@@ -41,7 +41,7 @@ Python 程式取得 RentCast 資料，比對可選用的 agent 查核 Redfin 私
 
 ## Evidence terms
 
-- **同房型樣本**：比對來源並套用明確條件後，相符的 SFH 或 Townhouse。已知 Condo、condominium 產權，或未釐清的 Condo／Townhouse 衝突均排除。Townhome 建築形式不能證明 fee-simple 產權；一般無已知衝突的 Townhouse 候選仍未查核產權與社區可比性。
+- **住宅樣本**：比對來源並套用明確條件後，與主屋相符的 SFH 或 Townhouse；可另啟用另一種住宅作尺寸相近的市場參考，分組顯示窗口、筆數及零筆警示，中位數僅使用主屋房型。已知 Condo、condominium 產權，或未釐清的 Condo／Townhouse 衝突均排除。Townhome 建築形式不能證明 fee-simple 產權；一般無已知衝突的 Townhouse 候選仍未查核產權與社區可比性。
 - **來源比較證據**：保存在本機的原始供應商主張、來源、採用值、差異與排除原因，供未來評估供應商。這些是待驗證的基準資料，不是獨立確認的真值。
 - **Redfin 優先**：已辨認的 MLS 資料可在同一事件的衝突中優先採用。舊 Redfin 事件不能抹去新 RentCast 主張；尚未核對的受影響指標暫不使用，兩邊資料皆保留。搜尋摘要與估值不能成為主要指標。
 - **來源 DOM**：掛牌來源提供的非負整數天數，搭配觀察日期。它不是推算的上市至簽約或上市至成交時間。

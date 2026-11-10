@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 from zoneinfo import ZoneInfo
@@ -21,6 +21,8 @@ class HomeEvidence:
     window_days: int
     stale_active: int
     unknown_type: int
+    evidence_type: str | None = None
+    groups: List[HomeEvidence] = field(default_factory=list)
 
 
 def _date(value: str | None) -> datetime | None:
@@ -32,12 +34,23 @@ def _date(value: str | None) -> datetime | None:
         return None
 
 
-def _evidence(home_run: HomeRun, as_of: datetime) -> HomeEvidence:
+def _evidence(home_run: HomeRun, as_of: datetime, evidence_type: str | None = None) -> HomeEvidence:
+    types = home_run.home.comparable_property_types or [home_run.home.property_type]
+    if evidence_type is None and len(types) > 1:
+        groups = [_evidence(home_run, as_of, kind) for kind in types]
+        return HomeEvidence(home_run, [row for group in groups for row in group.sales],
+                            [row for group in groups for row in group.active],
+                            max(group.window_days for group in groups),
+                            sum(group.stale_active for group in groups), groups[0].unknown_type,
+                            groups=groups)
+    if evidence_type is None and types[0] != home_run.home.property_type:
+        evidence_type = types[0]
+    filter_home = replace(home_run.home, property_type=evidence_type) if evidence_type else home_run.home
     day = as_of.replace(hour=0, minute=0, second=0, microsecond=0)
     pool = [comp for comp in home_run.ranked_comps
             if not (comp.raw.get("_sale_record") or {}).get("_identity_conflict")
             and not comp.raw.get("_listing_identity_conflict")]
-    primary = [comp for comp in pool if cohort_for(home_run.home, comp) == "primary"]
+    primary = [comp for comp in pool if cohort_for(filter_home, comp) == "primary"]
     cap = min(home_run.home.days_old if home_run.home.days_old > 0 else 365, 365)
 
     def sales_in(rows, window):
@@ -65,12 +78,20 @@ def _evidence(home_run: HomeRun, as_of: datetime) -> HomeEvidence:
             break
     active, stale = active_in(primary)
     return HomeEvidence(home_run, sales, active, window, stale,
-                        sum(cohort_for(home_run.home, comp) == "unknown" for comp in (home_run.candidates or pool) if not comp.raw.get("_is_subject")))
+                        sum(cohort_for(home_run.home, comp) == "unknown" for comp in (home_run.candidates or pool) if not comp.raw.get("_is_subject")), evidence_type)
+
+
+def _type_label(view: HomeEvidence) -> str:
+    return "SFH" if view.evidence_type == "Single Family" else view.evidence_type or "同房型"
 
 
 def _summary(view: HomeEvidence) -> str:
+    if view.groups:
+        return "不同房型分開參考，不合併推算房價。" + " ".join(
+            _type_label(group) + "：" + _summary(group) for group in view.groups)
     if not view.sales:
-        return "缺少同房型可用成交紀錄，目前無法據此判斷房屋價值或市場冷熱。"
+        return ("缺少此房型可用成交紀錄，目前無法據此判斷房屋價值或市場冷熱。" if view.evidence_type else
+                "缺少同房型可用成交紀錄，目前無法據此判斷房屋價值或市場冷熱。")
     if len(view.sales) < 3:
         return "成交樣本偏少，適合逐筆參考，不宜推論房價走勢。"
     return "可逐筆比較成交與掛牌證據；樣本不代表完整市場或這間房的估值。"
@@ -123,7 +144,7 @@ def _details(comp: ComparableSale, kind: str, as_of: datetime) -> List[str]:
         gap = asking_gap(comp)
         if gap:
             sign = "+" if gap.amount >= 0 else "-"
-            lines.extend([f"售前開價參考 {_money(gap.observation.price)}（觀察日期 {gap.observation.observed_date}，來源 {gap.observation.source}）",
+            lines.extend([f"售前開價參考 {_money(gap.observation.price)}（開價紀錄日期 {gap.observation.observed_date}，來源 {gap.observation.source}）",
                           f"成交對開價參考落差 {sign}${abs(gap.amount):,.0f}（{gap.percent:+.1f}%）；非已確認最終／原始開價比。"])
             dom = source_dom(gap.observation.days_on_market)
             if dom is not None:
@@ -251,7 +272,9 @@ def _sales_caption(view: HomeEvidence) -> str:
 
 
 def _counts(view: HomeEvidence) -> str:
-    return ("【來源完整度未知】" if not view.home_run.retrieval else "【部分搜尋】" if any(not entry.complete for entry in view.home_run.retrieval) else "") + f"同房型 {view.window_days} 天內成交紀錄 {len(view.sales)} 筆 · 近 7 天觀察到的待售開價 {len(view.active)} 筆"
+    if view.groups:
+        return "；".join(_counts(group) for group in view.groups)
+    return ("【來源完整度未知】" if not view.home_run.retrieval else "【部分搜尋】" if any(not entry.complete for entry in view.home_run.retrieval) else "") + f"{_type_label(view)} {view.window_days} 天內成交紀錄 {len(view.sales)} 筆 · 近 7 天觀察到的待售開價 {len(view.active)} 筆"
 
 
 def _subject_summary(home_run: HomeRun) -> str:
@@ -294,9 +317,9 @@ def _health_lines(view: HomeEvidence) -> List[str]:
     if dates:
         lines.append("來源查詢日期：" + "、".join(dates) + "。")
     if view.unknown_type:
-        lines.append(f"另有 {view.unknown_type} 筆候選房型未提供，未併入同房型證據。")
+        lines.append(f"另有 {view.unknown_type} 筆候選房型未提供，未併入" + ("所選住宅房型證據。" if view.groups or view.evidence_type else "同房型證據。"))
     if not view.sales:
-        lines.append("同房型符合條件的成交為零，是目前資料與篩選結果，不代表周邊一年沒有成交。")
+        lines.append(("所選住宅房型" if view.groups else "同房型") + "符合條件的成交為零，是目前資料與篩選結果，不代表周邊一年沒有成交。")
     if view.stale_active:
         lines.append(f"另有 {view.stale_active} 筆標示待售但觀察日期過舊、缺漏或異常，未列入目前待售。")
     return lines
@@ -328,16 +351,28 @@ def _criteria(home_run: HomeRun) -> str:
     return "相似條件（須同時符合）：" + "。".join(groups) + "。"
 
 
+def _sale_title(view: HomeEvidence) -> str:
+    if view.evidence_type == "Single Family":
+        return "SFH 周邊獨棟市場參考"
+    return f"{_type_label(view)} 成交參考" if view.evidence_type else "同房型成交紀錄"
+
+
+def _active_title(view: HomeEvidence) -> str:
+    return f"{_type_label(view)} 目前待售開價" if view.evidence_type else "同房型目前待售開價"
+
+
 def _plain_home(view: HomeEvidence, as_of: datetime) -> str:
     home = view.home_run.home
-    lines = [home.name, home.address, f"追蹤房屋： {_subject_summary(view.home_run)}", f"搜尋半徑 {home.max_radius_miles:g} 英里。", _search_scope(view.home_run), _criteria(view.home_run), _summary(view), "", "同房型成交紀錄", _sales_caption(view)]
-    if not view.sales:
-        lines.append("查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。")
-    lines.extend(_plain_rows(view.sales, "sale", as_of))
-    lines.extend(["", "同房型目前待售開價", "僅列來源近 7 天仍觀察為待售的物件；開價不等於成交價。", _dom_caption(view.active)])
-    if not view.active:
-        lines.append("未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")
-    lines.extend(_plain_rows(view.active, "active", as_of))
+    lines = [home.name, home.address, f"追蹤房屋： {_subject_summary(view.home_run)}", f"搜尋半徑 {home.max_radius_miles:g} 英里。", _search_scope(view.home_run), _criteria(view.home_run), _summary(view)]
+    for group in view.groups or [view]:
+        lines.extend(["", _sale_title(group), _sales_caption(group)])
+        if not group.sales:
+            lines.append("查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。")
+        lines.extend(_plain_rows(group.sales, "sale", as_of))
+        lines.extend(["", _active_title(group), "僅列來源近 7 天仍觀察為待售的物件；開價不等於成交價。", _dom_caption(group.active)])
+        if not group.active:
+            lines.append("未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")
+        lines.extend(_plain_rows(group.active, "active", as_of))
     lines.extend(["", "資料完整度", *_health_lines(view)])
     return "\n".join(lines)
 
@@ -373,9 +408,13 @@ def _html_home(view: HomeEvidence, as_of: datetime) -> str:
         return "".join(result)
     parts = [f'<section style="margin-top:36px;"><h2 style="margin:0 0 8px;font-size:22px;line-height:1.4;color:#172f32;">{_esc(home.name)}</h2>',
              paragraph(home.address), paragraph("追蹤房屋：" + _subject_summary(view.home_run)),
-             paragraph(f"搜尋半徑 {home.max_radius_miles:g} 英里。"), paragraph(_search_scope(view.home_run)) if _search_scope(view.home_run) else "", paragraph(_criteria(view.home_run)),
-             section("同房型成交紀錄", _sales_caption(view), view.sales, "sale", "查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。"),
-             section("同房型目前待售開價", "僅列來源近 7 天仍觀察為待售的物件；開價不等於成交價。 " + _dom_caption(view.active), view.active, "active", "未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")]
+             paragraph(f"搜尋半徑 {home.max_radius_miles:g} 英里。"), paragraph(_search_scope(view.home_run)) if _search_scope(view.home_run) else "", paragraph(_criteria(view.home_run))]
+    if view.groups:
+        parts.append(paragraph(_summary(view)))
+    for group in view.groups or [view]:
+        parts.extend([
+            section(_sale_title(group), _sales_caption(group), group.sales, "sale", "查詢範圍內未取得同時具成交價、成交日期及相符來源房型的可用紀錄；不以開價補足。零筆符合紀錄不代表周邊沒有成交。"),
+            section(_active_title(group), "僅列來源近 7 天仍觀察為待售的物件；開價不等於成交價。 " + _dom_caption(group.active), group.active, "active", "未取得符合條件且近期仍被觀察為待售的物件；不代表附近沒有待售房屋。")])
     parts.extend(['<h3 style="margin:28px 0 4px;font-size:16px;color:#172f32;">資料完整度</h3>', *[paragraph(line) for line in _health_lines(view)], '</section>'])
     return "".join(parts)
 

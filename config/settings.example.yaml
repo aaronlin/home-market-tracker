@@ -46,6 +46,7 @@ tracker:
       name: Example townhouse
       address: 200 Example Ln, Sampletown, CA
       property_type: Townhouse
+      comparable_property_types: [Townhouse, Single Family]
       purchase_price: 900000
       comp_count: 25
       display_count: 10

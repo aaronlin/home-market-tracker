@@ -31,6 +31,45 @@ class HeatDigestTests(unittest.TestCase):
     def digest(self, rows, retrieval=()):
         return render_digest(TrackerRun([HomeRun(self.home, rows, retrieval=list(retrieval))], '2026-11-10T20:00:00+00:00'), TrackerState())
 
+    def test_dual_types_keep_independent_windows_counts_and_subject(self):
+        self.home = replace(self.home, comparable_property_types=['Townhouse', 'Single Family'])
+        older = replace(self.sale, address='8 Older Townhouse',
+                        recorded_sale=RecordedSale(900000, '2026-02-01', 'property.lastSale'))
+        sfh = [replace(self.sale, id=f'sfh-{i}', address=f'{20+i} Detached Reference',
+                       source_property_types={'property': 'Single Family'}) for i in range(3)]
+        condo = replace(self.sale, address='99 Excluded Condo', source_property_types={'property': 'Condo'})
+        digest = self.digest([older, *sfh, condo])
+        for key in ('text_body', 'html_body'):
+            body = digest[key]
+            self.assertIn('Townhouse 365 天內成交紀錄 1 筆', body)
+            self.assertIn('SFH 90 天內成交紀錄 3 筆', body)
+            self.assertIn('Townhouse 成交參考', body)
+            self.assertIn('SFH 周邊獨棟市場參考', body)
+            self.assertIn('不同房型分開參考，不合併推算房價', body)
+            self.assertIn('8 Older Townhouse', body)
+            self.assertNotIn('99 Excluded Condo', body)
+            self.assertNotIn('同房型成交紀錄', body)
+            self.assertNotIn('同房型 365 天', body)
+            self.assertIn('追蹤房屋：', body)
+            self.assertIn('連棟住宅', body)
+        self.assertEqual(digest['html_body'].count('Synthetic townhouse</h2>'), 2)
+
+    def test_dual_types_show_zero_and_active_per_group(self):
+        self.home = replace(self.home, comparable_property_types=['Townhouse', 'Single Family'])
+        active = replace(self.sale, address='7 Active Detached', recorded_sale=None,
+                         source_property_types={'property': 'Single Family'},
+                         status='Active', last_seen_date='2026-11-10', listing_price=950000)
+        for key in ('text_body', 'html_body'):
+            body = self.digest([active])[key]
+            self.assertIn('Townhouse 365 天內成交紀錄 0 筆', body)
+            self.assertIn('SFH 365 天內成交紀錄 0 筆', body)
+            self.assertIn('Townhouse 目前待售開價', body)
+            self.assertIn('SFH 目前待售開價', body)
+            self.assertIn('7 Active Detached', body)
+            self.assertNotIn('同房型成交紀錄', body)
+            self.assertNotIn('同房型 365 天', body)
+            self.assertIn('零筆符合紀錄不代表周邊沒有成交', body)
+
     def test_condo_is_excluded_even_when_listing_calls_it_townhouse(self):
         condo = replace(self.sale, source_property_types={'listing': 'Townhouse', 'property': 'Condo'})
         for body in self.digest([condo]).values():
@@ -52,7 +91,7 @@ class HeatDigestTests(unittest.TestCase):
     def test_dated_reference_is_not_presented_as_final_or_original_ratio(self):
         for body in (self.digest([self.sale])['text_body'], self.digest([self.sale])['html_body']):
             self.assertIn('成交對開價參考落差 -$100,000（-10.0%）', body)
-            self.assertIn('觀察日期 2026-09-10', body)
+            self.assertIn('開價紀錄日期 2026-09-10', body)
             self.assertIn('非已確認最終／原始開價比', body)
             self.assertIn('來源 DOM：10 天', body)
             self.assertIn('成交單價 $600／sqft', body)

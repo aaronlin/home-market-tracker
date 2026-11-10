@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from app_config import SetupError, load_dotenv, load_settings, resolve_repo_path
 from deliver import send_email
-from models import HomeConfig, HomeRun, RetrievalInfo, TrackerRun
+from models import HomeConfig, HomeRun, RetrievalInfo, TrackerRun, canonical_property_type
 from normalize import extract_value_estimate, normalize_comps, normalize_candidates, qualify_comps, qualification_reasons, normalize_nearby_listings
 from provider import PropertyDataProvider, RentCastProvider, write_raw_snapshot
 from render import render_digest
@@ -129,12 +129,14 @@ def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
         raise SetupError("No tracker.homes configured.")
     result = []
     for raw_home in homes:
+        property_type = str(raw_home.get("property_type") or defaults.get("property_type") or "Single Family")
         result.append(
             HomeConfig(
                 id=str(raw_home["id"]),
                 name=str(raw_home["name"]),
                 address=str(raw_home["address"]),
-                property_type=str(raw_home.get("property_type") or defaults.get("property_type") or "Single Family"),
+                property_type=property_type,
+                comparable_property_types=_comparable_property_types(raw_home, property_type),
                 max_radius_miles=float(raw_home.get("max_radius_miles") or defaults.get("max_radius_miles") or 1.5),
                 days_old=int(raw_home.get("days_old") or defaults.get("days_old") or 180),
                 comp_count=int(raw_home.get("comp_count") or defaults.get("comp_count") or 10),
@@ -160,6 +162,19 @@ def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
             )
         )
     return result
+
+
+def _comparable_property_types(raw_home: Dict[str, Any], property_type: str) -> List[str]:
+    if "comparable_property_types" not in raw_home:
+        return []
+    values = raw_home["comparable_property_types"]
+    if (not isinstance(values, list) or not values
+            or any(not isinstance(value, str) or value not in {"Single Family", "Townhouse"} for value in values)):
+        raise SetupError("comparable_property_types must be a nonempty list of Single Family or Townhouse.")
+    subject_type = canonical_property_type(property_type)
+    if subject_type not in {"Single Family", "Townhouse"}:
+        raise SetupError("comparable_property_types requires a Single Family or Townhouse subject.")
+    return list(dict.fromkeys([subject_type, *values]))
 
 
 def _comp_annotations(raw_annotations: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
