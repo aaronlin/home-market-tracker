@@ -114,6 +114,56 @@ class RedfinTests(unittest.TestCase):
         self.assertEqual(asking_gap(result).amount, 100000)
         self.assertEqual(asking_gap(result).observation.observed_date, '2026-10-05')
 
+    def test_last_known_ask_survives_later_unknown_change_with_caveat(self):
+        record = self.history_record()
+        record['sale_history'].append({'event': 'price_changed', 'date': '2026-10-05',
+                                       'price': 2500000, 'mls_number': 'RF1'})
+        record['sale_history'].append({'event': 'price_changed', 'date': '2026-10-06',
+                                       'price': None, 'mls_number': 'RF1'})
+        result = apply_redfin([self.comp], self.load(record))[0]
+        gap = asking_gap(result)
+        self.assertIsNotNone(gap)
+        self.assertEqual(gap.amount, 100000)
+        self.assertTrue(gap.observation.later_price_unknown)
+        self.assertEqual(result.source_snapshots['redfin'], record)
+        record['sale_history'].append({'event': 'price_changed', 'date': '2026-10-07',
+                                       'price': 2550000, 'mls_number': 'RF1'})
+        gap = asking_gap(apply_redfin([self.comp], self.load(record))[0])
+        self.assertEqual(gap.amount, 50000)
+        self.assertFalse(gap.observation.later_price_unknown)
+
+    def test_verified_listing_timeline_survives_missing_asking_price(self):
+        record = self.history_record()
+        for row in record['sale_history']:
+            if row['event'] == 'listed':
+                row['price'] = None
+        result = apply_redfin([self.comp], self.load(record))[0]
+        self.assertIsNone(asking_gap(result))
+        timeline = result.listing_timeline
+        self.assertEqual((timeline.listed_date, timeline.pending_date, timeline.sold_date),
+                         ('2026-10-01', '2026-10-08', '2026-10-23'))
+        self.assertEqual(timeline.source, 'redfin')
+        self.assertEqual(asdict(result), asdict(apply_redfin([result], self.load(record))[0]))
+        record['sale_history'] = [row for row in record['sale_history'] if row['event'] != 'pending']
+        timeline = apply_redfin([self.comp], self.load(record))[0].listing_timeline
+        self.assertIsNone(timeline.pending_date)
+        self.assertEqual(timeline.sold_date, '2026-10-23')
+
+    def test_timeline_keeps_same_day_zero_and_clears_on_unconfirmed_sale(self):
+        record = self.history_record()
+        for row in record['sale_history']:
+            if row['event'] != 'rental_listed':
+                row['date'] = '2026-10-23'
+        result = apply_redfin([self.comp], self.load(record))[0]
+        self.assertEqual(result.listing_timeline.listed_date, '2026-10-23')
+        self.assertEqual(result.listing_timeline.pending_date, '2026-10-23')
+        self.assertEqual(result.listing_timeline.sold_date, '2026-10-23')
+        newer = replace(self.comp, recorded_sale=RecordedSale(2700000, '2026-10-25', 'property.lastSale'),
+                        listing_timeline=result.listing_timeline)
+        unresolved = apply_redfin([newer], self.load(record))[0]
+        self.assertIsNone(unresolved.recorded_sale)
+        self.assertIsNone(unresolved.listing_timeline)
+
     def test_history_gap_survives_later_unresolved_current_listing(self):
         record = self.history_record()
         comp = replace(self.comp, status='Active', last_seen_date='2026-10-29')
@@ -128,7 +178,8 @@ class RedfinTests(unittest.TestCase):
             lambda r: r['sale_history'][2].update(source_group='public_record'),
             lambda r: r['sale_history'][2].update(price=2500000),
             lambda r: r['sale_history'][2].update(date='2026-10-22'),
-            lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-03', 'price': None, 'mls_number': 'RF1'}),
+            lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-03', 'price': None, 'mls_number': 'OTHER'}),
+            lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-03', 'price': None, 'mls_number': 'RF1', 'source_group': 'estimate'}),
             lambda r: r['sale_history'].append({'event': 'listed', 'date': '2026-10-09', 'price': 2400000, 'mls_number': 'RF2'}),
             lambda r: r['sale_history'].append({'event': 'delisted', 'date': '2026-10-09', 'mls_number': 'RF1'}),
             lambda r: r['sale_history'].append({'event': 'price_changed', 'date': '2026-10-01', 'price': 2400000, 'mls_number': 'RF1'}),

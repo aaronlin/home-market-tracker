@@ -7,7 +7,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from models import ComparableSale, HomeConfig, HomeRun, ListingObservation, RecordedSale, RetrievalInfo, TrackerRun
+from models import ComparableSale, HomeConfig, HomeRun, ListingObservation, ListingTimeline, RecordedSale, RedfinReference, RetrievalInfo, TrackerRun
 from render import render_digest
 from state import TrackerState
 
@@ -97,11 +97,68 @@ class HeatDigestTests(unittest.TestCase):
             self.assertIn('成交單價 $600／sqft', body)
             self.assertNotIn('議價折扣', body)
 
+    def test_last_known_ask_caveat_is_adjacent_to_gap(self):
+        row = replace(self.sale, listing_observations=[replace(self.sale.listing_observations[0],
+                                                               later_price_unknown=True)])
+        for key in ('text_body', 'html_body'):
+            body = self.digest([row])[key]
+            self.assertIn('最後已知售前開價參考 $1,000,000', body)
+            self.assertIn('其後有改價紀錄但金額未公開', body)
+            self.assertLess(body.index('成交對開價參考落差'), body.index('其後有改價紀錄'))
+
     def test_post_sale_asking_price_does_not_become_a_sale_gap(self):
         row = replace(self.sale, listing_observations=[replace(self.sale.listing_observations[0], observed_date='2026-10-10', removed_date='2026-10-20')])
         body = self.digest([row])['text_body']
         self.assertIn('無可核對的售前掛牌參考', body)
         self.assertNotIn('-10.0%', body)
+
+    def test_overview_dom_medians_separate_types_sources_and_exclusions(self):
+        self.home = replace(self.home, comparable_property_types=['Townhouse', 'Single Family'])
+        active = replace(self.sale, recorded_sale=None, status='Active', last_seen_date='2026-11-10',
+                         listing_price=950000, days_on_market=10)
+        excluded = replace(active, id='excluded', address='3 Excluded Street', days_on_market=900,
+                           exclude_from_median=True)
+        sfh = replace(active, id='sfh', address='4 Detached Street', days_on_market=40,
+                      source_property_types={'property': 'Single Family'})
+        reference = RedfinReference('5 Source Street', '5 Source Street',
+            'https://www.redfin.com/CA/Synthetic/5-Source-St-90000/home/123', '2026-11-10', 'page',
+            field_evidence={'days_on_market': {'metric': 'cumulative_dom'}})
+        cumulative = replace(active, id='cumulative', address='5 Source Street', days_on_market=100,
+                             redfin_reference=reference, field_sources={'days_on_market': 'redfin'})
+        for key in ('text_body', 'html_body'):
+            body = self.digest([active, excluded, sfh, cumulative])[key]
+            overview = body.split('變化追蹤尚未啟用')[0]
+            self.assertIn('Townhouse 目前待售來源 DOM：RentCast 掛牌 DOM 中位數 10 天（有效 1/3 筆；非成交速度）', overview)
+            self.assertIn('Townhouse 目前待售來源 DOM：Redfin 累計 DOM 中位數 100 天（有效 1/3 筆；非成交速度）', overview)
+            self.assertIn('SFH 目前待售來源 DOM：RentCast 掛牌 DOM 中位數 40 天（有效 1/1 筆；非成交速度）', overview)
+            self.assertNotIn('中位數 55', overview)
+
+    def test_overview_dom_missing_is_explicit_and_sales_do_not_fabricate_dom(self):
+        active = replace(self.sale, id='active', address='6 Active Street', recorded_sale=None,
+                         status='Active', last_seen_date='2026-11-10', listing_price=950000,
+                         days_on_market=None)
+        sale = replace(self.sale, listing_observations=[])
+        for key in ('text_body', 'html_body'):
+            body = self.digest([active, sale])[key]
+            self.assertIn('目前待售來源 DOM：未提供（有效 0/1 筆）', body.split('變化追蹤尚未啟用')[0])
+            self.assertIn('來源 DOM：未提供；不以掛牌到成交日期推算。', body)
+
+    def test_sale_timeline_is_visible_without_an_asking_gap(self):
+        row = replace(self.sale, listing_observations=[], recorded_sale=RecordedSale(900000, '2026-10-23', 'redfin'))
+        row = replace(row, listing_timeline=ListingTimeline(
+            listed_date='2026-10-01', pending_date='2026-10-08', sold_date='2026-10-23',
+            mls_number='SYNTHETIC1', source='redfin'))
+        for key in ('text_body', 'html_body'):
+            body = self.digest([row])[key]
+            self.assertIn('上市至首次 Pending：7 天', body)
+            self.assertIn('上市至成交：22 天', body)
+            self.assertIn('含簽約後交割期間', body)
+            self.assertIn('2026-10-01 → 2026-10-08', body)
+            self.assertIn('來源 DOM：未提供；上述日期差不是來源 DOM。', body)
+        row = replace(row, listing_timeline=ListingTimeline(
+            listed_date='2026-10-01', pending_date=None, sold_date='2026-10-23',
+            mls_number='SYNTHETIC1', source='redfin'))
+        self.assertIn('上市至首次 Pending：未提供可核對的 Pending 日期。', self.digest([row])['text_body'])
 
     def test_dom_zero_is_available_while_missing_and_invalid_remain_unknown(self):
         active = replace(self.sale, recorded_sale=None, status='Active', last_seen_date='2026-11-10', listing_price=950000, days_on_market=0)

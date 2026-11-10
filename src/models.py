@@ -56,6 +56,15 @@ class RecordedSale:
 
 
 @dataclass(frozen=True)
+class ListingTimeline:
+    listed_date: str
+    pending_date: Optional[str]
+    sold_date: str
+    mls_number: str
+    source: str
+
+
+@dataclass(frozen=True)
 class ListingObservation:
     price: int
     observed_date: str
@@ -64,6 +73,7 @@ class ListingObservation:
     mls_number: Optional[str]
     days_on_market: Optional[int]
     source: str
+    later_price_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +91,7 @@ class RedfinReference:
     source_group: str = "unknown"
     field_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     ownership: str = "unknown"
+    listing_timeline: Optional[ListingTimeline] = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +138,7 @@ class ComparableSale:
     source_snapshots: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     unresolved_fields: List[str] = field(default_factory=list)
     reconciliation_notes: List[str] = field(default_factory=list)
+    listing_timeline: Optional[ListingTimeline] = None
 
     @property
     def market_property_type(self) -> Optional[str]:

@@ -4,6 +4,7 @@ import html
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
+from statistics import median
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
@@ -144,13 +145,30 @@ def _details(comp: ComparableSale, kind: str, as_of: datetime) -> List[str]:
         gap = asking_gap(comp)
         if gap:
             sign = "+" if gap.amount >= 0 else "-"
-            lines.extend([f"售前開價參考 {_money(gap.observation.price)}（開價紀錄日期 {gap.observation.observed_date}，來源 {gap.observation.source}）",
+            lines.extend([f"最後已知售前開價參考 {_money(gap.observation.price)}（開價紀錄日期 {gap.observation.observed_date}，來源 {gap.observation.source}）",
                           f"成交對開價參考落差 {sign}${abs(gap.amount):,.0f}（{gap.percent:+.1f}%）；非已確認最終／原始開價比。"])
-            dom = source_dom(gap.observation.days_on_market)
-            if dom is not None:
-                lines.append(f"對應掛牌參考的來源 DOM：{dom} 天；非到成交所需天數。")
+            if gap.observation.later_price_unknown:
+                lines.append("其後有改價紀錄但金額未公開；以上以最後已知價格計算，非最終開價。")
         else:
             lines.append("開價落差：無可核對的售前掛牌參考，不計算。")
+        timeline = comp.listing_timeline
+        if timeline:
+            start, pending, sold = map(_date, (timeline.listed_date, timeline.pending_date, timeline.sold_date))
+            if pending:
+                lines.append(f"上市至首次 Pending：{(pending - start).days} 天（{timeline.listed_date} → {timeline.pending_date}；依來源事件日期計算，來源 {timeline.source}）。")
+            else:
+                lines.append("上市至首次 Pending：未提供可核對的 Pending 日期。")
+            lines.append(f"上市至成交：{(sold - start).days} 天（{timeline.listed_date} → {timeline.sold_date}；含簽約後交割期間，來源 {timeline.source}）。")
+        else:
+            lines.extend(["上市至首次 Pending：未提供可核對的掛牌時間線。",
+                          "上市至成交：未提供可核對的掛牌時間線。"])
+        dom = source_dom(gap.observation.days_on_market) if gap else None
+        if dom is not None:
+            lines.append(f"對應掛牌參考的來源 DOM：{dom} 天；非到成交所需天數。")
+        elif timeline:
+            lines.append("來源 DOM：未提供；上述日期差不是來源 DOM。")
+        else:
+            lines.append("來源 DOM：未提供；不以掛牌到成交日期推算。")
     else:
         observed = _date(comp.last_seen_date)
         age = (as_of.date() - observed.date()).days
@@ -297,6 +315,40 @@ def _dom_caption(rows: List[ComparableSale]) -> str:
     return f"來源 DOM 有效值 {available}/{len(rows)} 筆；不是掛牌至簽約或成交的天數。"
 
 
+def _overview_dom_lines(view: HomeEvidence) -> List[str]:
+    if view.groups:
+        return [line for group in view.groups for line in _overview_dom_lines(group)]
+    prefix = (_type_label(view) + " " if view.evidence_type else "") + "目前待售來源 DOM："
+    total = len(view.active)
+    groups: Dict[tuple[str, str], List[int]] = {}
+    for comp in view.active:
+        value = source_dom(comp.days_on_market)
+        if value is None or comp.exclude_from_median:
+            continue
+        source = comp.field_sources.get("days_on_market", "rentcast")
+        if source == "rentcast":
+            metric = "listing_dom"
+        elif source == "redfin" and comp.redfin_reference:
+            metric = comp.redfin_reference.field_evidence.get("days_on_market", {}).get("metric")
+            if metric not in {"listing_dom", "cumulative_dom"}:
+                continue
+        else:
+            continue
+        groups.setdefault((source, metric), []).append(value)
+    if not groups:
+        lines = [prefix + f"未提供（有效 0/{total} 筆）。"]
+    else:
+        labels = {("rentcast", "listing_dom"): "RentCast 掛牌 DOM",
+                  ("redfin", "listing_dom"): "Redfin 掛牌週期 DOM",
+                  ("redfin", "cumulative_dom"): "Redfin 累計 DOM"}
+        lines = [prefix + f"{labels[key]} 中位數 {_number(median(values))} 天（有效 {len(values)}/{total} 筆；非成交速度）。"
+                 for key, values in sorted(groups.items())]
+    excluded = sum(comp.exclude_from_median for comp in view.active)
+    if excluded:
+        lines.append(f"{_type_label(view)}待售 {excluded} 筆已設定不納入中位數，仍逐筆列示。")
+    return lines
+
+
 def _health_lines(view: HomeEvidence) -> List[str]:
     lines = ["搜尋完成僅代表讀完本次條件；來源分類或尺寸錯誤，仍可能讓物件未被取得。"]
     metadata = view.home_run.retrieval
@@ -433,8 +485,11 @@ def render_digest(run: TrackerRun, previous: TrackerState) -> Dict[str, str]:
     text = [title, time_label, "", "本期速覽"]
     overview = []
     for view in views:
-        text.extend([view.home_run.home.name, _counts(view), _summary(view), *_coverage_lines(view), ""])
-        overview.append(f'<tr><td style="padding:16px 0;border-bottom:1px solid #dce3df;"><h2 style="margin:0 0 6px;font-size:17px;color:#172f32;">{_esc(view.home_run.home.name)}</h2><p style="margin:0 0 6px;font-size:15px;color:#1d6560;">{_esc(_counts(view))}</p><p style="margin:0;font-size:15px;color:#526866;">{_esc(_summary(view))}</p>' + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#526866;">{_esc(line)}</p>' for line in _coverage_lines(view)) + '</td></tr>')
+        text.extend([view.home_run.home.name, _counts(view), *_overview_dom_lines(view), _summary(view), *_coverage_lines(view), ""])
+        overview.append(f'<tr><td style="padding:16px 0;border-bottom:1px solid #dce3df;"><h2 style="margin:0 0 6px;font-size:17px;color:#172f32;">{_esc(view.home_run.home.name)}</h2><p style="margin:0 0 6px;font-size:15px;color:#1d6560;">{_esc(_counts(view))}</p>'
+                        + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#1d6560;">{_esc(line)}</p>' for line in _overview_dom_lines(view))
+                        + f'<p style="margin:6px 0 0;font-size:15px;color:#526866;">{_esc(_summary(view))}</p>'
+                        + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#526866;">{_esc(line)}</p>' for line in _coverage_lines(view)) + '</td></tr>')
     text.extend([baseline, "", *[_plain_home(view, as_of) for view in views], "", disclaimer])
     body = ('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + _esc(title) + '</title></head>'
             '<body style="margin:0;padding:0;background:#f3f5f1;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'Noto Sans TC\',Arial,sans-serif;font-size:16px;line-height:1.75;color:#172f32;">'

@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable
 from urllib.parse import urlsplit
 
 from app_config import SetupError
-from models import ComparableSale, ListingObservation, RecordedSale, RedfinReference
+from models import ComparableSale, ListingObservation, ListingTimeline, RecordedSale, RedfinReference
 from normalize import _redfin_url
 
 
@@ -112,7 +112,7 @@ def _field_evidence(record: dict, latest: date) -> dict:
     return deepcopy(evidence)
 
 
-def _history_observations(record: dict, sale: RecordedSale | None, latest: date) -> list[ListingObservation]:
+def _history_evidence(record: dict, sale: RecordedSale | None, latest: date) -> tuple[list[ListingObservation], ListingTimeline | None]:
     """Pair structured MLS history, never prices extracted from free-form facts."""
     history = record.get('sale_history', [])
     if not isinstance(history, list):
@@ -144,32 +144,35 @@ def _history_observations(record: dict, sale: RecordedSale | None, latest: date)
     sale_group = (record.get('recorded_sale') or {}).get('source_group',
         record.get('field_evidence', {}).get('recorded_sale', {}).get('source_group', record.get('source_group', 'unknown')))
     if not sale or record.get('source') != 'page' or sale_group != 'mls_history':
-        return []
+        return [], None
     closes = [e for e in events if e['event'] == 'sold' and e['date'] == sale.transaction_date
               and e['price'] == sale.price]
     if len(closes) != 1:
-        return []
+        return [], None
     close = closes[0]
     sale_mls = (record.get('recorded_sale') or {}).get('mls_number')
     if sale_mls and sale_mls != close['mls_number']:
-        return []
+        return [], None
     episode = [e for e in events if e['mls_number'] == close['mls_number'] and e['date'] <= close['date']]
     starts = [e for e in episode if e['event'] == 'listed']
     if len(starts) != 1:
-        return []
+        return [], None
     start = starts[0]['date']
     if any(e['event'] in {'delisted', 'cancelled'} or e['date'] < start
            or e['source_group'] not in {'mls_listing', 'mls_history'} for e in episode):
-        return []
+        return [], None
     if any(e['mls_number'] != close['mls_number'] and start <= e['date'] <= close['date'] for e in events):
-        return []
+        return [], None
     if sum(e['event'] == 'sold' for e in episode) != 1:
-        return []
-    asks = [e for e in episode if e['event'] in {'listed', 'price_changed'}]
-    if any(e['price'] is None for e in asks):
-        return []
-    return [ListingObservation(e['price'], e['date'], start, close['date'], close['mls_number'], None, 'redfin')
-            for e in asks]
+        return [], None
+    pending = sorted(e['date'] for e in episode if e['event'] == 'pending')
+    timeline = ListingTimeline(start, pending[0] if pending else None, close['date'], close['mls_number'], 'redfin')
+    unknown_changes = [e['date'] for e in episode if e['event'] == 'price_changed' and e['price'] is None]
+    asks = [e for e in episode if e['event'] in {'listed', 'price_changed'} and e['price'] is not None]
+    observations = [ListingObservation(e['price'], e['date'], start, close['date'], close['mls_number'],
+                                      None, 'redfin', any(day >= e['date'] for day in unknown_changes))
+                    for e in asks]
+    return observations, timeline
 
 
 def _reference(record: Any) -> RedfinReference:
@@ -269,9 +272,10 @@ def _reference(record: Any) -> RedfinReference:
         observations.append(ListingObservation(
             _number(raw.get('price'), 'observation price', True, False), observed, start, removed,
             mls, _number(dom, 'observation DOM', True, True) if dom is not None else None, 'redfin'))
-    observations.extend(_history_observations(record, sale, latest))
+    history_observations, timeline = _history_evidence(record, sale, latest)
+    observations.extend(history_observations)
     return RedfinReference(address, matched, url, checked, source, list(facts), values, sale, observations,
-                           deepcopy(record), source_group, field_evidence, ownership)
+                           deepcopy(record), source_group, field_evidence, ownership, timeline)
 
 
 def _group(reference: RedfinReference, field: str) -> str:
@@ -297,6 +301,8 @@ def _original_comp(comp: ComparableSale) -> ComparableSale:
     if original.get('recorded_sale'):
         original['recorded_sale'] = RecordedSale(**original['recorded_sale'])
     original['listing_observations'] = [ListingObservation(**item) for item in original.get('listing_observations', [])]
+    if original.get('listing_timeline'):
+        original['listing_timeline'] = ListingTimeline(**original['listing_timeline'])
     return ComparableSale(**original)
 
 
@@ -340,7 +346,7 @@ def apply_redfin(comps: Iterable[ComparableSale], references: Dict[str, RedfinRe
 
         def withhold_sale(reason: str) -> None:
             unresolved.update(('recorded_sale', 'sale_price', 'sale_date'))
-            for field in ('recorded_sale', 'sold_price', 'market_price', 'price_per_sqft'):
+            for field in ('recorded_sale', 'sold_price', 'market_price', 'price_per_sqft', 'listing_timeline'):
                 changes[field] = None
                 sources[field] = 'unresolved'
             changes['listing_observations'] = []
@@ -424,6 +430,8 @@ def apply_redfin(comps: Iterable[ComparableSale], references: Dict[str, RedfinRe
                 elif rc_sale_date and rc_sale_date > rf_sale.transaction_date:
                     withhold_sale('RentCast reports a later transaction than the saved Redfin MLS sale; transaction metrics are unresolved and both events are retained.')
                 else:
+                    changes['listing_timeline'] = reference.listing_timeline
+                    sources['listing_timeline'] = 'redfin' if reference.listing_timeline else 'unavailable'
                     changes['recorded_sale'] = rf_sale
                     changes['sold_price'] = rf_sale.price
                     changes['listing_observations'] = _observations(reference) if 'status' not in unresolved else []
