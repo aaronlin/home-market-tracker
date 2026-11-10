@@ -46,6 +46,7 @@ class HomeConfig:
     same_hoa_addresses: List[str] = field(default_factory=list)
     same_hoa_patterns: List[str] = field(default_factory=list)
     comparable_property_types: List[str] = field(default_factory=list)
+    market_zip_code: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,38 @@ class ComparableSale:
 
 
 @dataclass(frozen=True)
+class RegionalMonth:
+    month: str
+    property_type: str
+    median_asking_price: Optional[float] = None
+    median_dom: Optional[float] = None
+    new_listings: Optional[int] = None
+    total_listings: Optional[int] = None
+    complete: bool = False
+
+
+@dataclass(frozen=True)
+class RegionalHistory:
+    zip_code: str
+    fetched_at: str
+    source_updated_at: Optional[str] = None
+    months: List[RegionalMonth] = field(default_factory=list)
+    status: str = "unavailable"
+    issue: Optional[str] = None
+    from_cache: bool = False
+
+
+@dataclass(frozen=True)
+class CaptureBaseline:
+    fingerprint: str
+    status: str = "first_capture"
+    previous_captured_at: Optional[str] = None
+    previous_active_counts: Dict[str, int] = field(default_factory=dict)
+    current_active_counts: Dict[str, int] = field(default_factory=dict)
+    issue: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class HomeRun:
     home: HomeConfig
     comps: List[ComparableSale]
@@ -173,6 +206,8 @@ class HomeRun:
     nearby_listings: List[ComparableSale] = field(default_factory=list)
     retrieval: List[RetrievalInfo] = field(default_factory=list)
     candidates: List[ComparableSale] = field(default_factory=list)
+    regional_history: Optional[RegionalHistory] = None
+    capture_baseline: Optional[CaptureBaseline] = None
 
     @property
     def ranked_comps(self) -> List[ComparableSale]:

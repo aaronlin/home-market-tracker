@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import sys
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -15,6 +17,8 @@ from provider import PropertyDataProvider, RentCastProvider, write_raw_snapshot
 from render import render_digest
 from state import load_state, save_state
 from redfin import load_redfin_references, apply_redfin
+from regional import load_regional
+from capture_history import capture_baseline
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -59,7 +63,7 @@ def run_preview(settings: Dict[str, Any], provider: PropertyDataProvider) -> int
 
 
 def run_send(settings: Dict[str, Any], provider: PropertyDataProvider) -> int:
-    run = build_run(settings, provider)
+    run = build_run(settings, provider, persist_history=True)
     previous = load_state(_state_path(settings))
     digest = render_digest(run, previous)
     send_result = send_email(_subject(settings, digest["subject"]), digest["html_body"], digest["text_body"], dry_run=False)
@@ -70,10 +74,11 @@ def run_send(settings: Dict[str, Any], provider: PropertyDataProvider) -> int:
     return 0
 
 
-def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> TrackerRun:
+def build_run(settings: Dict[str, Any], provider: PropertyDataProvider, *, persist_history: bool = False) -> TrackerRun:
     home_runs: List[HomeRun] = []
     generated = TrackerRun.now([]).generated_at
     tracker = settings.get("tracker") or {}
+    market_options = _market_options(tracker)
     references = load_redfin_references(resolve_repo_path(tracker.get("redfin_reference_path", "data/references/redfin.json")))
     for home in _home_configs(settings):
         payload = provider.fetch_home_market(home)
@@ -103,7 +108,59 @@ def build_run(settings: Dict[str, Any], provider: PropertyDataProvider) -> Track
                 candidates=candidates,
             )
         )
+    if market_options['enabled']:
+        as_of = datetime.fromisoformat(generated)
+        base = _raw_snapshot_root(settings).parent
+        formal_captures = resolve_repo_path(market_options.get('capture_root', base / 'history' / 'cohorts'))
+        research = _preview_root(settings) / 'research'
+        cache = (resolve_repo_path(market_options.get('cache_root', base / 'cache' / 'markets'))
+                 if persist_history else research / 'markets')
+        enriched = []
+        for home_run in home_runs:
+            regional = load_regional(provider, _regional_zip(home_run), cache, as_of,
+                                     history_months=market_options['history_months'],
+                                     max_age_days=market_options['max_age_days'])
+            baseline = capture_baseline(home_run, as_of, formal_captures, persist=persist_history,
+                                        research_root=research / 'cohorts')
+            enriched.append(replace(home_run, regional_history=regional, capture_baseline=baseline))
+        home_runs = enriched
     return TrackerRun(homes=home_runs, generated_at=generated)
+
+
+def _market_options(tracker: Dict[str, Any]) -> Dict[str, Any]:
+    raw = tracker.get('market_history', {})
+    if not isinstance(raw, dict):
+        raise SetupError('tracker.market_history must be a mapping.')
+    options = {'enabled': True, 'history_months': 36, 'max_age_days': 45, **raw}
+    if not isinstance(options['enabled'], bool):
+        raise SetupError('market_history.enabled must be boolean.')
+    for key, maximum in (('history_months', 120), ('max_age_days', 365)):
+        value = options[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+            raise SetupError(f'market_history.{key} must be an integer between 1 and {maximum}.')
+    for key in ('capture_root', 'cache_root'):
+        if key in options and (not isinstance(options[key], str) or not options[key].strip()):
+            raise SetupError(f'market_history.{key} must be a nonempty path.')
+    return options
+
+
+def _market_zip_override(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r'\d{5}', value):
+        raise SetupError('market_zip_code must contain exactly five digits.')
+    return value
+
+
+def _regional_zip(home_run: HomeRun) -> str | None:
+    if home_run.home.market_zip_code:
+        return home_run.home.market_zip_code
+    raw = str(home_run.subject_property.get('zipCode') or '')
+    match = re.fullmatch(r'(\d{5})(?:-\d{4})?', raw)
+    if match:
+        return match[1]
+    match = re.search(r'\b[A-Za-z]{2}\s+(\d{5})(?:-\d{4})?$', home_run.home.address)
+    return match[1] if match else None
 
 
 def _source_differences(comp) -> Dict[str, Any]:
@@ -137,6 +194,7 @@ def _home_configs(settings: Dict[str, Any]) -> List[HomeConfig]:
                 address=str(raw_home["address"]),
                 property_type=property_type,
                 comparable_property_types=_comparable_property_types(raw_home, property_type),
+                market_zip_code=_market_zip_override(raw_home.get("market_zip_code")),
                 max_radius_miles=float(raw_home.get("max_radius_miles") or defaults.get("max_radius_miles") or 1.5),
                 days_old=int(raw_home.get("days_old") or defaults.get("days_old") or 180),
                 comp_count=int(raw_home.get("comp_count") or defaults.get("comp_count") or 10),
