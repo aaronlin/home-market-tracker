@@ -123,3 +123,9 @@ GH_HOST=github.com gh pr create \
 ```
 
 SSH handles Git transport for push/fetch operations, but `gh pr create` still uses the GitHub API to create the pull request. If PR creation fails with an auth error, refresh the GitHub CLI auth session with `GH_HOST=github.com gh auth login -h github.com`.
+
+## 技術文件語言
+
+- 新建或更新的技術文件、技術變更紀錄、設計說明與驗證報告，預設使用繁體中文。
+- 程式碼可維持英文；指令、API 名稱、識別字、路徑、設定鍵與工具要求固定的標題保留原文。
+- 技術紀錄內嵌的文件也應有繁體中文說明，不只翻譯摘要。使用者另有明確指定時依指定語言處理。

@@ -1,13 +1,17 @@
-# Email design
+# 郵件設計
 
-The email is a reading surface for private market monitoring. Use a restrained editorial report with a warm neutral background, white reading surface, dark green-black text and muted teal emphasis. It needs no hero metric, illustrations, remote fonts, tracking assets or scripts.
+這封郵件是供屋主閱讀的私有房市報告。採用簡潔、克制的編輯式版面：暖中性色背景、白色內容區、深綠黑文字與柔和藍綠重點色。不需要大型宣傳指標、插圖、遠端字型、追蹤素材或腳本。
 
-Use one column at all widths, capped at 680px. Inline base styles and presentation tables keep the email readable when advanced CSS is unavailable. Body text is 16px; secondary facts are 14px with strong contrast. The heading scale is 26/22/18px. Use system fonts with Traditional Chinese fallbacks.
+所有寬度都採單欄，最大寬度為 680px。使用行內基本樣式與標示為排版用途的表格，讓不支援進階 CSS 的郵件客戶端仍可閱讀。內文為 16px，次要資料為 14px，保留清楚對比；標題層級為 26／22／18px。使用系統字型並提供繁體中文字型備援。
 
-Lead with both home summaries, then each home's dated sales and current asking evidence. Only matching SFH or Townhouse evidence is featured. Known Condo and unresolved ownership/type conflicts are excluded with compact counts, without a Condo reference section. Keep retrieval health separate from market signals. Separate rows with fine rules; avoid nested cards, wide data tables and decorative badges. A zero-data section explains the evidence gap. Rank scores, mixed medians and purchase-price anchors do not lead the report. Wrap long addresses and preserve plain-text content parity.
+先呈現兩間房的摘要，再列各自附日期的成交與待售開價。只呈現相符的 SFH 或 Townhouse。已知 Condo 與未釐清的產權／房型衝突排除，並簡短顯示排除筆數，不另設 Condo 參考區。資料取得完整度與市場訊號分開說明。
 
-Candidates are inspected at desktop and narrow phone widths. Browser render evidence does not establish Gmail/Outlook compatibility or inbox delivery. One final demonstration email is sent only after PM, designer and housing-domain review accept the final candidate.
+逐筆資料以細線分隔，避免巢狀卡片、過寬表格與裝飾性標籤。沒有資料的區塊應說明證據缺口。排序分數、混合中位數與購入價格不作為報告主角。長地址要完整換行，HTML 與純文字內容保持一致。
 
-Source DOM and dated asking-reference differences stay adjacent to their own observations. Show unavailable fields explicitly without replacing them with zero. Do not use decorative heat badges, a universal score, or aggressive buy/sell calls to action. Each evidence row offers either a safe source-provided Redfin page or an explicitly labeled Google site search; the destination is never disguised. Links are underlined, contrastful and padded for touch, with native keyboard focus intact.
+候選郵件必須檢查桌面與窄手機版面。瀏覽器呈現證據不能證明 Gmail／Outlook 相容性或郵件已進入收件匣。只有 PM、designer 與住宅交易角度 reviewer 都接受同一份最終候選後，才寄出一封最終展示郵件。
 
-Redfin match coverage and adopted-candidate coverage sit beside each summary, with actual check dates, explicit zero coverage and saved/not-weekly-refreshed wording. Rows distinguish source event dates from check dates. Keep one source line and a short prioritized difference line; preserve the full audit privately. Known Townhouse candidates disclose unverified ownership/project comparability.
+來源 DOM 與具日期的開價參考落差，要緊鄰對應觀察資料。缺少值時明示未提供，不能以零代替。不得使用裝飾性熱度標籤、通用熱度分數或強烈買賣指示。
+
+每筆資料提供安全的來源 Redfin 房源頁，或明確標示的 Google 站內搜尋備援，不混淆實際目的地。連結加底線、具足夠對比與觸控間距，並保留原生鍵盤焦點。
+
+Redfin 連結匹配涵蓋率與採用欄位的候選筆數，放在各房摘要旁，附實際查核日期、明確的零涵蓋狀態，以及「保存快照，非每週自動更新」說明。逐筆區塊分清來源事件日期與查核日期。來源說明與優先差異各用一行簡短呈現，完整稽核資料保存在本機。一般 Townhouse 候選要說明產權與社區可比性尚未查核。
