@@ -6,6 +6,17 @@ from statistics import median
 from typing import Any, Dict, List, Optional
 
 
+def canonical_property_type(value: str) -> Optional[str]:
+    kind = "".join(character for character in value.lower() if character.isalnum())
+    if kind in {"singlefamily", "singlefamilyresidential", "singlefamilyhome", "sfh"}:
+        return "Single Family"
+    if kind in {"townhouse", "townhome", "townhomes"}:
+        return "Townhouse"
+    if kind in {"condo", "condominium", "condocoop", "condominiumownership"}:
+        return "Condo"
+    return None if kind in {"", "unknown", "other", "none"} else kind
+
+
 @dataclass(frozen=True)
 class HomeConfig:
     id: str
@@ -23,6 +34,8 @@ class HomeConfig:
     year_built: Optional[str] = None
     comp_square_footage: Optional[str] = None
     comp_lot_size: Optional[str] = None
+    listing_bedrooms: Optional[str] = None
+    listing_bathrooms: Optional[str] = None
     display_count: Optional[int] = None
     close_listing_radius_miles: Optional[float] = None
     ranked_comp_bedrooms: Optional[str] = None
@@ -32,6 +45,63 @@ class HomeConfig:
     comp_annotations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     same_hoa_addresses: List[str] = field(default_factory=list)
     same_hoa_patterns: List[str] = field(default_factory=list)
+    comparable_property_types: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RecordedSale:
+    price: int
+    transaction_date: str
+    source: str
+
+
+@dataclass(frozen=True)
+class ListingTimeline:
+    listed_date: str
+    pending_date: Optional[str]
+    sold_date: str
+    mls_number: str
+    source: str
+
+
+@dataclass(frozen=True)
+class ListingObservation:
+    price: int
+    observed_date: str
+    listed_date: str
+    removed_date: Optional[str]
+    mls_number: Optional[str]
+    days_on_market: Optional[int]
+    source: str
+    later_price_unknown: bool = False
+
+
+@dataclass(frozen=True)
+class RedfinReference:
+    address: str
+    matched_address: str
+    url: str
+    checked_at: str
+    source: str
+    facts: List[str] = field(default_factory=list)
+    values: Dict[str, Any] = field(default_factory=dict)
+    recorded_sale: Optional[RecordedSale] = None
+    listing_observations: List[ListingObservation] = field(default_factory=list)
+    raw: Dict[str, Any] = field(default_factory=dict)
+    source_group: str = "unknown"
+    field_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    ownership: str = "unknown"
+    listing_timeline: Optional[ListingTimeline] = None
+
+
+@dataclass(frozen=True)
+class RetrievalInfo:
+    source: str
+    rows: int
+    pages: int
+    complete: bool
+    filters: Dict[str, Any] = field(default_factory=dict)
+    fetched_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -59,13 +129,38 @@ class ComparableSale:
     exclude_from_median: bool = False
     rank_score: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    recorded_sale: Optional[RecordedSale] = None
+    source_property_types: Dict[str, str] = field(default_factory=dict)
+    listing_observations: List[ListingObservation] = field(default_factory=list)
+    redfin_url: Optional[str] = None
+    redfin_reference: Optional[RedfinReference] = None
+    field_sources: Dict[str, str] = field(default_factory=dict)
+    source_snapshots: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    unresolved_fields: List[str] = field(default_factory=list)
+    reconciliation_notes: List[str] = field(default_factory=list)
+    listing_timeline: Optional[ListingTimeline] = None
+
+    @property
+    def market_property_type(self) -> Optional[str]:
+        if (self.redfin_reference and self.redfin_reference.ownership == "condominium"
+                or any(canonical_property_type(value) == "Condo" for value in self.source_property_types.values())):
+            return "Condo"
+        classification = next((self.source_property_types[source] for source in
+                               ("redfin", "property", "listing", "avm") if self.source_property_types.get(source)), "")
+        return canonical_property_type(classification)
 
     @property
     def sale_price(self) -> Optional[int]:
+        if "recorded_sale" in self.unresolved_fields or "sale_price" in self.unresolved_fields:
+            return None
         return self.sold_price or self.market_price or self.listing_price
 
     @property
     def sale_date(self) -> Optional[str]:
+        if "recorded_sale" in self.unresolved_fields or "sale_date" in self.unresolved_fields:
+            return None
+        if self.recorded_sale and self.field_sources.get("recorded_sale") == "redfin":
+            return self.recorded_sale.transaction_date
         return self.removed_date or self.last_seen_date or self.listed_date
 
 
@@ -76,17 +171,29 @@ class HomeRun:
     value_estimate: Optional[int] = None
     subject_property: Dict[str, Any] = field(default_factory=dict)
     nearby_listings: List[ComparableSale] = field(default_factory=list)
+    retrieval: List[RetrievalInfo] = field(default_factory=list)
+    candidates: List[ComparableSale] = field(default_factory=list)
+
+    @property
+    def ranked_comps(self) -> List[ComparableSale]:
+        return [comp for comp in self.comps if comp.market_property_type != "Condo"
+                and self._passes_ranked_comp_filters(comp)]
 
     @property
     def selected_comps(self) -> List[ComparableSale]:
-        comps = [comp for comp in self.comps if self._passes_ranked_comp_filters(comp)]
+        comps = self.ranked_comps
         if self.home.display_count and self.home.display_count > 0:
             return comps[: self.home.display_count]
         return comps
 
     @property
     def final_comps(self) -> List[ComparableSale]:
-        return [comp for comp in self.selected_comps if not comp.exclude_from_median][:5]
+        subject_type = canonical_property_type(self.home.property_type)
+        primary = [comp for comp in self.ranked_comps
+                   if comp.market_property_type == subject_type and subject_type in {"Single Family", "Townhouse"}]
+        if self.home.display_count and self.home.display_count > 0:
+            primary = primary[:self.home.display_count]
+        return [comp for comp in primary if not comp.exclude_from_median][:5]
 
     @property
     def median_sale_price(self) -> Optional[float]:
