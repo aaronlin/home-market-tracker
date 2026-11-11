@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
 from market_metrics import asking_gap, cohort_for, source_dom
+from heat import assess_regional
 
 from models import ComparableSale, HomeRun, TrackerRun
 from state import TrackerState
@@ -349,6 +350,64 @@ def _overview_dom_lines(view: HomeEvidence) -> List[str]:
     return lines
 
 
+@dataclass(frozen=True)
+class MarketSummarySection:
+    title: str
+    headline: str
+    lines: tuple[str, ...]
+    note: str
+
+
+def _market_summary_sections(view: HomeEvidence, as_of: datetime) -> List[MarketSummarySection]:
+    sections = []
+    for group in view.groups or [view]:
+        kind = group.evidence_type or group.home_run.home.property_type
+        label = "SFH" if kind == "Single Family" else kind
+        baseline = group.home_run.capture_baseline
+        complete = bool(group.home_run.retrieval) and all(entry.complete for entry in group.home_run.retrieval)
+        local_note = "資料充分度：尚無可比基期；本期筆數不代表完整市場。"
+        if not complete or baseline and baseline.status == "partial":
+            local = "本期搜尋不完整或完整度未知，暫停附近跨期比較。"
+            local_note = "資料充分度：不足；缺漏不能視為庫存下降。"
+        elif baseline and baseline.status == "changed_cohort":
+            local = "搜尋條件或來源版本已變更，正在建立新的可比基準。"
+        elif (baseline and baseline.status == "comparable" and baseline.previous_captured_at
+              and kind in baseline.previous_active_counts and kind in baseline.current_active_counts):
+            previous = baseline.previous_active_counts[kind]
+            current = baseline.current_active_counts[kind]
+            local = (f"符合條件待售由 {previous} 筆變為 {current} 筆"
+                     f"（{baseline.previous_captured_at[:10]} → {as_of.date().isoformat()}）。")
+            local_note = "資料充分度：僅可比較相同條件快照；筆數變化不等於新上市或成交。"
+        else:
+            local = "尚無條件一致的跨期基準，暫不判斷附近升溫或降溫。"
+        sections.append(MarketSummarySection(label + " 附近固定條件觀察", local, (), local_note))
+        history = group.home_run.regional_history
+        regional = assess_regional(history, kind, as_of)
+        scope = f"ZIP {history.zip_code}" if history and history.zip_code else "ZIP 未取得"
+        sections.append(MarketSummarySection(
+            label + " 區域掛牌背景", regional.headline,
+            (f"{scope} · {regional.period} 對照 {regional.comparison_period}。", *regional.evidence),
+            " ".join((regional.sufficiency, *regional.limitations, regional.source_line))))
+    return sections
+
+
+def _plain_market_summary(view: HomeEvidence, as_of: datetime) -> List[str]:
+    lines = []
+    for section in _market_summary_sections(view, as_of):
+        lines.extend([section.title, section.headline, *section.lines, section.note])
+    return lines
+
+
+def _html_market_summary(view: HomeEvidence, as_of: datetime) -> str:
+    sections = []
+    for section in _market_summary_sections(view, as_of):
+        sections.append(f'<h3 style="margin:18px 0 4px;font-size:15px;color:#172f32;">{_esc(section.title)}</h3>'
+                        f'<p style="margin:0 0 6px;font-size:15px;color:#172f32;">{_esc(section.headline)}</p>'
+                        + "".join(f'<p style="margin:4px 0 0;font-size:14px;color:#526866;font-variant-numeric:tabular-nums;">{_esc(line)}</p>' for line in section.lines)
+                        + f'<p style="margin:6px 0 0;font-size:13px;color:#526866;">{_esc(section.note)}</p>')
+    return "".join(sections)
+
+
 def _health_lines(view: HomeEvidence) -> List[str]:
     lines = ["搜尋完成僅代表讀完本次條件；來源分類或尺寸錯誤，仍可能讓物件未被取得。"]
     metadata = view.home_run.retrieval
@@ -480,15 +539,18 @@ def render_digest(run: TrackerRun, previous: TrackerState) -> Dict[str, str]:
     views = [_evidence(home_run, as_of) for home_run in run.homes]
     title = f"房市近況｜{len(views)} 間房的成交與待售資料"
     time_label = f"報告產生：{local_time}（太平洋時間）"
-    baseline = "變化追蹤尚未啟用；本期不提供新增、降價或房價漲跌比較。"
+    has_history = any(home.regional_history is not None or home.capture_baseline is not None for home in run.homes)
+    baseline = ("附近快照變化與區域掛牌背景分開呈現；資料不足時不判斷趨勢，不將首次觀察視為新增上市或成交。"
+                if has_history else "變化追蹤尚未啟用；本期不提供新增、降價或房價漲跌比較。")
     disclaimer = "提供買賣判斷的市場證據，不是房屋估值或買賣建議。各欄位與成交紀錄依逐筆標示的來源；下架不代表成交。開價參考落差不是已確認的最終／原始開價比，也不代表議價幅度。"
     text = [title, time_label, "", "本期速覽"]
     overview = []
     for view in views:
-        text.extend([view.home_run.home.name, _counts(view), *_overview_dom_lines(view), _summary(view), *_coverage_lines(view), ""])
+        text.extend([view.home_run.home.name, _counts(view), *_overview_dom_lines(view), _summary(view), *_plain_market_summary(view, as_of), *_coverage_lines(view), ""])
         overview.append(f'<tr><td style="padding:16px 0;border-bottom:1px solid #dce3df;"><h2 style="margin:0 0 6px;font-size:17px;color:#172f32;">{_esc(view.home_run.home.name)}</h2><p style="margin:0 0 6px;font-size:15px;color:#1d6560;">{_esc(_counts(view))}</p>'
                         + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#1d6560;">{_esc(line)}</p>' for line in _overview_dom_lines(view))
                         + f'<p style="margin:6px 0 0;font-size:15px;color:#526866;">{_esc(_summary(view))}</p>'
+                        + _html_market_summary(view, as_of)
                         + "".join(f'<p style="margin:6px 0 0;font-size:14px;color:#526866;">{_esc(line)}</p>' for line in _coverage_lines(view)) + '</td></tr>')
     text.extend([baseline, "", *[_plain_home(view, as_of) for view in views], "", disclaimer])
     body = ('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + _esc(title) + '</title></head>'

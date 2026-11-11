@@ -9,6 +9,12 @@ tracker:
   state_path: data/state/home_market.yaml
   preview_root: data/previews
   raw_snapshot_root: data/raw
+  market_history:
+    enabled: true
+    history_months: 36
+    max_age_days: 45
+    cache_root: data/cache/markets
+    capture_root: data/history/cohorts
   weekly_schedule:
     day: saturday
     hour_local: 8

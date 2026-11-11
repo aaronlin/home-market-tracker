@@ -39,6 +39,10 @@ class RentCastProvider:
         return {"avm": avm, "sale_listings": listings, "properties": properties,
                 "_retrieval": listings["searches"] + properties["searches"]}
 
+    def fetch_market_history(self, zip_code: str, history_months: int = 36) -> Dict[str, Any]:
+        return self._get_json("/markets", {"zipCode": zip_code, "dataType": "Sale",
+                                           "historyRange": history_months})
+
     def fetch_home_comps(self, home: HomeConfig) -> Dict[str, Any]:
         params = {
             "address": home.address,
